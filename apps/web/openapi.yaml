@@ -1,0 +1,459 @@
+openapi: 3.0.3
+info:
+  title: Onboarding Intelligence API
+  version: 1.0.0
+  description: REST contract for an AI-generated onboarding workspace that connects company context, progress, people, projects, and documentation gaps.
+servers:
+  - url: https://api.onboard.example.com
+security:
+  - bearerAuth: []
+tags:
+  - name: Onboarding
+    description: Workspace generation and section content.
+  - name: Progress
+    description: Progress bar and checklist mutations.
+  - name: Context graph
+    description: People, typed source links, and project timelines.
+  - name: Unknowns
+    description: Documentation gaps, suggested owners, and feedback.
+paths:
+  /v1/onboarding:
+    get:
+      tags: [Onboarding]
+      operationId: getOnboardingWorkspace
+      summary: Get the current onboarding workspace
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/Include'
+      responses:
+        '200':
+          description: Generated onboarding workspace.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OnboardingWorkspace' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /v1/onboarding/generate:
+    post:
+      tags: [Onboarding]
+      operationId: generateOnboardingWorkspace
+      summary: Generate or refresh an onboarding workspace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GenerateOnboardingRequest' }
+      responses:
+        '202':
+          description: Generation job queued.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GenerationJob' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /v1/onboarding/ask:
+    post:
+      tags: [Onboarding]
+      operationId: askOnboardingContext
+      summary: Ask a question with page context
+      description: Answers a question using the current onboarding page, selected text, and linked company sources as explicit context.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AssistantQuestion' }
+      responses:
+        '200':
+          description: Context-aware answer with citations and follow-up questions.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AssistantAnswer' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /v1/onboarding/progress:
+    get:
+      tags: [Progress]
+      operationId: getOnboardingProgress
+      summary: Read progress and checklist state
+      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      responses:
+        '200':
+          description: Progress model.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OnboardingProgress' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    patch:
+      tags: [Progress]
+      operationId: updateOnboardingProgress
+      summary: Set the active onboarding position
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateProgressRequest' }
+      responses:
+        '200':
+          description: Updated progress model.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OnboardingProgress' }
+  /v1/onboarding/checklist/{itemId}:
+    patch:
+      tags: [Progress]
+      operationId: updateChecklistItem
+      summary: Complete or reopen a checklist item
+      parameters: [{ $ref: '#/components/parameters/ItemId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChecklistMutationRequest' }
+      responses:
+        '200':
+          description: Updated item and recalculated progress.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChecklistMutation' }
+  /v1/onboarding/sections/{sectionId}:
+    get:
+      tags: [Onboarding]
+      operationId: getOnboardingSection
+      summary: Read a section with linked context
+      parameters:
+        - $ref: '#/components/parameters/SectionId'
+        - $ref: '#/components/parameters/Include'
+      responses:
+        '200':
+          description: Section content and linked entities.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OnboardingSection' }
+  /v1/people:
+    get:
+      tags: [Context graph]
+      operationId: listRelevantPeople
+      summary: List people relevant to this onboarding
+      parameters:
+        - name: onboardingId
+          in: query
+          required: true
+          schema: { type: string }
+        - name: relationship
+          in: query
+          schema: { type: string, enum: [all, manager, teammate, collaborator, subject-matter-expert] }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20, maximum: 100 }
+      responses:
+        '200':
+          description: Relevant people with typed profile links.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Person' } }
+                  nextCursor: { type: string, nullable: true }
+  /v1/projects/{projectId}/timeline:
+    get:
+      tags: [Context graph]
+      operationId: getProjectTimeline
+      summary: Render a project timeline
+      parameters:
+        - $ref: '#/components/parameters/ProjectId'
+        - $ref: '#/components/parameters/Include'
+      responses:
+        '200':
+          description: Timeline-ready project model.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectTimeline' }
+  /v1/sources/{sourceId}:
+    get:
+      tags: [Context graph]
+      operationId: getSource
+      summary: Resolve a source link
+      parameters:
+        - $ref: '#/components/parameters/SourceId'
+        - $ref: '#/components/parameters/Include'
+      responses:
+        '200':
+          description: Canonical typed source link and access metadata.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SourceLink' }
+  /v1/onboarding/unknowns:
+    get:
+      tags: [Unknowns]
+      operationId: listUnknowns
+      summary: List documentation gaps and owners
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [open, resolved, dismissed], default: open }
+        - name: sectionId
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Open unknowns and suggested people to ask.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Unknown' } }
+  /v1/onboarding/feedback:
+    post:
+      tags: [Unknowns]
+      operationId: createOnboardingFeedback
+      summary: Capture feedback on generated content
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FeedbackRequest' }
+      responses:
+        '201':
+          description: Feedback received.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Feedback' }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    UserId: { name: userId, in: query, required: true, schema: { type: string } }
+    ItemId: { name: itemId, in: path, required: true, schema: { type: string } }
+    SectionId: { name: sectionId, in: path, required: true, schema: { $ref: '#/components/schemas/SectionId' } }
+    ProjectId: { name: projectId, in: path, required: true, schema: { type: string } }
+    SourceId: { name: sourceId, in: path, required: true, schema: { type: string } }
+    Include:
+      name: include
+      in: query
+      schema:
+        type: array
+        items: { $ref: '#/components/schemas/IncludeValue' }
+      style: form
+      explode: false
+  responses:
+    Unauthorized:
+      description: Missing or invalid bearer token.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+  schemas:
+    SectionId:
+      type: string
+      description: Stable identifiers for the five onboarding sections.
+      enum: [company, team-role, the-job, setup, unknowns]
+    IncludeValue:
+      type: string
+      description: Optional related data that an endpoint may expand in its response. Unsupported values should be ignored or rejected with 400.
+      enum: [sections, people, timelines, unknowns, sources, checklist, blocks, thread, author, permissions, milestones, owners, projects]
+    OnboardingWorkspace:
+      type: object
+      required: [id, status, progress, sections, people, timelines, unknowns, sources]
+      properties:
+        id: { type: string }
+        status: { type: string, enum: [generating, ready, stale, failed] }
+        progress: { $ref: '#/components/schemas/OnboardingProgress' }
+        sections: { type: array, items: { $ref: '#/components/schemas/OnboardingSection' } }
+        people: { type: array, items: { $ref: '#/components/schemas/Person' } }
+        timelines: { type: array, items: { $ref: '#/components/schemas/ProjectTimeline' } }
+        unknowns: { type: array, items: { $ref: '#/components/schemas/Unknown' } }
+        sources: { type: array, items: { $ref: '#/components/schemas/SourceLink' } }
+    OnboardingProgress:
+      type: object
+      required: [completed, total, percent, currentSectionId, checklist]
+      properties:
+        completed: { type: integer }
+        total: { type: integer }
+        percent: { type: integer, minimum: 0, maximum: 100 }
+        currentSectionId: { $ref: '#/components/schemas/SectionId' }
+        lastSeenItemId: { type: string, nullable: true }
+        checklist: { type: array, items: { $ref: '#/components/schemas/ChecklistItem' } }
+    ChecklistItem:
+      type: object
+      required: [id, sectionId, label, completed]
+      properties:
+        id: { type: string }
+        sectionId: { $ref: '#/components/schemas/SectionId' }
+        label: { type: string }
+        completed: { type: boolean }
+        note: { type: string, nullable: true }
+    OnboardingSection:
+      type: object
+      required: [id, number, title, description, status, blocks, sources]
+      properties:
+        id: { $ref: '#/components/schemas/SectionId' }
+        number: { type: string }
+        title: { type: string }
+        description: { type: string }
+        status: { type: string, enum: [complete, in-progress, locked] }
+        blocks: { type: array, items: { $ref: '#/components/schemas/StructuredBlock' } }
+        people: { type: array, items: { $ref: '#/components/schemas/Person' } }
+        sources: { type: array, items: { $ref: '#/components/schemas/SourceLink' } }
+        timelines: { type: array, items: { $ref: '#/components/schemas/ProjectTimeline' } }
+    Person:
+      type: object
+      required: [id, name, role, relationship, links]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        role: { type: string }
+        relationship: { type: string, enum: [manager, teammate, collaborator, subject-matter-expert] }
+        avatarUrl: { type: string, format: uri, nullable: true }
+        links: { type: array, items: { $ref: '#/components/schemas/SourceLink' } }
+        evidence: { type: array, items: { type: string } }
+    SourceLink:
+      type: object
+      required: [id, type, title, url, provider, access]
+      properties:
+        id: { type: string }
+        type: { type: string, enum: [slack_thread, slack_dm, notion_page, drive_file, internal_doc] }
+        title: { type: string }
+        url: { type: string, format: uri }
+        provider: { type: string, enum: [slack, notion, google_drive, internal] }
+        access: { type: string, enum: [available, restricted, expired, unavailable] }
+        quotedContext: { type: string, nullable: true }
+    ProjectTimeline:
+      type: object
+      required: [projectId, title, startDate, endDate, milestones]
+      properties:
+        projectId: { type: string }
+        title: { type: string }
+        startDate: { type: string, format: date }
+        endDate: { type: string, format: date }
+        milestones: { type: array, items: { $ref: '#/components/schemas/Milestone' } }
+        owners: { type: array, items: { $ref: '#/components/schemas/Person' } }
+        sources: { type: array, items: { $ref: '#/components/schemas/SourceLink' } }
+    Milestone:
+      type: object
+      required: [id, title, date, status]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        date: { type: string, format: date }
+        status: { type: string, enum: [done, next, future, blocked] }
+        ownerIds: { type: array, items: { type: string } }
+        sourceIds: { type: array, items: { type: string } }
+    Unknown:
+      type: object
+      required: [id, question, whyItMatters, suggestedOwnerId, status]
+      properties:
+        id: { type: string }
+        question: { type: string }
+        whyItMatters: { type: string }
+        suggestedOwnerId: { type: string }
+        evidence: { type: array, items: { type: string } }
+        status: { type: string, enum: [open, resolved, dismissed] }
+    GenerateOnboardingRequest:
+      type: object
+      required: [userId, role, teamId, sourceScope]
+      properties:
+        userId: { type: string }
+        role: { type: string }
+        teamId: { type: string }
+        sourceScope: { type: array, items: { type: string, enum: [slack, notion, drive, internal] } }
+        refresh: { type: boolean, default: false }
+    GenerationJob:
+      type: object
+      required: [jobId, status, pollUrl]
+      properties:
+        jobId: { type: string }
+        status: { type: string, enum: [queued, running, complete, failed] }
+        pollUrl: { type: string }
+    UpdateProgressRequest:
+      type: object
+      properties:
+        currentSectionId: { $ref: '#/components/schemas/SectionId' }
+        lastSeenItemId: { type: string }
+    ChecklistMutationRequest:
+      type: object
+      required: [completed]
+      properties:
+        completed: { type: boolean }
+        note: { type: string }
+    ChecklistMutation:
+      type: object
+      required: [itemId, completed, progress]
+      properties:
+        itemId: { type: string }
+        completed: { type: boolean }
+        progress: { $ref: '#/components/schemas/OnboardingProgress' }
+    FeedbackRequest:
+      type: object
+      required: [targetType, targetId, rating]
+      properties:
+        targetType: { type: string, enum: [section_block, source, person, unknown, timeline] }
+        targetId: { type: string }
+        rating: { type: string, enum: [helpful, needs-review, incorrect] }
+        comment: { type: string }
+    Feedback:
+      allOf:
+        - $ref: '#/components/schemas/FeedbackRequest'
+        - type: object
+          required: [id, status, createdAt]
+          properties:
+            id: { type: string }
+            status: { type: string, enum: [received, queued, resolved] }
+            createdAt: { type: string, format: date-time }
+    StructuredBlock:
+      type: object
+      description: A renderable content block. The type and renderHint enums tell the frontend which component to use; payload contains the type-specific data for that component.
+      required: [id, type, title, renderHint, payload]
+      properties:
+        id: { type: string }
+        type: { $ref: '#/components/schemas/StructuredBlockType' }
+        title: { type: string }
+        body: { type: string, nullable: true, description: Optional prose fallback for text-first blocks. }
+        payload: { type: object, additionalProperties: true, description: Type-specific structured data. }
+        sourceIds: { type: array, items: { type: string } }
+        personIds: { type: array, items: { type: string } }
+        renderHint: { $ref: '#/components/schemas/StructuredRenderHint' }
+    StructuredBlockType:
+      type: string
+      description: Stable discriminator for the frontend renderer.
+      enum: [paragraph, callout, job, checklist, question, timeline, source-cluster, person-card, process-flow, decision-record, glossary, unknown-card, comparison, link-list]
+    StructuredRenderHint:
+      type: string
+      description: Layout hint for clients that do not have a specialized renderer for the block type.
+      enum: [prose, card, compact-list, timeline, graph, table, callout]
+    AssistantQuestion:
+      type: object
+      required: [question, context]
+      properties:
+        question: { type: string, minLength: 1 }
+        context:
+          type: object
+          required: [onboardingId, currentPath]
+          properties:
+            onboardingId: { type: string }
+            currentPath: { type: string }
+            sectionId: { type: string, nullable: true }
+            selectedText: { type: string, nullable: true, maxLength: 320 }
+            entityIds: { type: array, items: { type: string } }
+    AssistantAnswer:
+      type: object
+      required: [answer, citations, suggestedQuestions, contextUsed]
+      properties:
+        answer: { type: string }
+        citations: { type: array, items: { $ref: '#/components/schemas/SourceLink' } }
+        relatedPeople: { type: array, items: { $ref: '#/components/schemas/Person' } }
+        suggestedQuestions: { type: array, items: { type: string } }
+        contextUsed:
+          type: object
+          properties:
+            currentPath: { type: string }
+            sectionId: { type: string, nullable: true }
+            selectedText: { type: string, nullable: true }
+    ApiError:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }
+        requestId: { type: string }
