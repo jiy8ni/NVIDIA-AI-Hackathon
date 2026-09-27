@@ -173,8 +173,8 @@ class NotionAdapter:
     def _rich_text(value: dict[str, Any]) -> str:
         for key in ("rich_text", "title"):
             entries = value.get(key, [])
-            if entries:
-                return "".join(item.get("plain_text", "") for item in entries)
+            if isinstance(entries, list) and entries:
+                return "".join(item.get("plain_text", "") for item in entries if isinstance(item, dict))
         return ""
 
     def _title(self, page: dict[str, Any]) -> str | None:
