@@ -1,0 +1,171 @@
+{
+  "$defs": {
+    "PersonRef": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Id"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Name"
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "title": "PersonRef",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": "1.0",
+      "title": "Schemaversion",
+      "type": "string"
+    },
+    "sourceId": {
+      "minLength": 1,
+      "title": "Sourceid",
+      "type": "string"
+    },
+    "sourceType": {
+      "enum": [
+        "slack_message",
+        "slack_thread",
+        "notion_page",
+        "notion_block",
+        "drive_file",
+        "drive_document",
+        "pdf_chunk",
+        "unknown"
+      ],
+      "title": "Sourcetype",
+      "type": "string"
+    },
+    "title": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Title"
+    },
+    "titleOrigin": {
+      "enum": [
+        "source",
+        "generated",
+        "unavailable"
+      ],
+      "title": "Titleorigin",
+      "type": "string"
+    },
+    "content": {
+      "title": "Content",
+      "type": "string"
+    },
+    "contentOrigin": {
+      "enum": [
+        "source_full_text",
+        "source_excerpt",
+        "parsed_text"
+      ],
+      "title": "Contentorigin",
+      "type": "string"
+    },
+    "url": {
+      "title": "Url",
+      "type": "string"
+    },
+    "createdAt": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Createdat"
+    },
+    "updatedAt": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Updatedat"
+    },
+    "retrievedAt": {
+      "title": "Retrievedat",
+      "type": "string"
+    },
+    "author": {
+      "$ref": "#/$defs/PersonRef"
+    },
+    "owner": {
+      "$ref": "#/$defs/PersonRef"
+    },
+    "extractionStatus": {
+      "enum": [
+        "complete",
+        "partial",
+        "failed"
+      ],
+      "title": "Extractionstatus",
+      "type": "string"
+    },
+    "accessStatus": {
+      "enum": [
+        "accessible",
+        "restricted",
+        "deleted",
+        "unknown"
+      ],
+      "title": "Accessstatus",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "sourceId",
+    "sourceType",
+    "title",
+    "titleOrigin",
+    "content",
+    "contentOrigin",
+    "url",
+    "createdAt",
+    "updatedAt",
+    "retrievedAt",
+    "author",
+    "owner",
+    "extractionStatus",
+    "accessStatus"
+  ],
+  "title": "Evidence",
+  "type": "object"
+}

@@ -1,426 +1,215 @@
-import { createServer } from 'node:http';
+import http from 'node:http';
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import Ajv from 'ajv';
+import addFormats from 'ajv-formats';
+import YAML from 'yaml';
+import { recheckAccess } from './access.mjs';
 
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const port = Number(process.env.PORT || 8787);
-
-const sourceLinks = [
-  {
-    id: 'src-notion-product',
-    type: 'notion_page',
-    title: '제품 원칙과 로드맵',
-    url: 'https://notion.so/northstar/product-principles',
-    provider: 'notion',
-    access: 'available',
-    quotedContext: 'Northstar는 빠른 피드백 루프와 명확한 오너십을 중요하게 생각합니다.'
-  },
-  {
-    id: 'src-slack-launch',
-    type: 'slack_thread',
-    title: '#launchpad: Atlas 출시 노트',
-    url: 'https://slack.com/archives/launchpad/p1710000000000000',
-    provider: 'slack',
-    access: 'available',
-    quotedContext: '첫 번째 고객 파일럿은 4월 둘째 주에 진행할 예정입니다.'
-  },
-  {
-    id: 'src-drive-architecture',
-    type: 'drive_file',
-    title: 'Atlas 아키텍처 의사결정 기록',
-    url: 'https://drive.google.com/file/d/atlas-architecture',
-    provider: 'google_drive',
-    access: 'available',
-    quotedContext: '이벤트 파이프라인이 활성화 지표의 기준 데이터입니다.'
-  },
-  {
-    id: 'src-internal-handbook',
-    type: 'internal_doc',
-    title: '엔지니어링 온보딩 핸드북',
-    url: 'https://internal.northstar.dev/handbook/engineering',
-    provider: 'internal',
-    access: 'available',
-    quotedContext: '모든 엔지니어는 첫 2주 안에 작은 프로덕션 변경을 배포합니다.'
+const secret = process.env.HANDOFF_JWT_SECRET;
+const internalToken = process.env.HANDOFF_INTERNAL_TOKEN;
+if (!secret || secret.length < 32 || !internalToken) throw new Error('Configure JWT secret (32+ chars) and internal token, or use node scripts/dev.mjs');
+const teamId = process.env.HANDOFF_TEAM_ID || 'atlas';
+const worker = process.env.HANDOFF_WORKER_URL || 'http://127.0.0.1:8788';
+const dataDir = process.env.HANDOFF_STATE_DIR || path.join(root, '.runtime');
+fs.mkdirSync(dataDir, { recursive: true });
+const statePath = path.join(dataDir, 'state.json');
+const state = fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath, 'utf8')) : { users: {}, feedback: [] };
+const active = new Map();
+const sectionIds = ['company', 'team-role', 'the-job', 'setup', 'unknowns'];
+const spec = YAML.parse(fs.readFileSync(path.join(root, 'apps/web/openapi.yaml'), 'utf8'));
+const ajv = new Ajv({ strict: false, allErrors: false });
+addFormats(ajv);
+const validators = Object.fromEntries(Object.entries(spec.components.schemas).map(([name, schema]) => [name, ajv.compile({ ...schema, components: spec.components })]));
+const hash = value => crypto.createHash('sha256').update(value).digest('hex').slice(0, 20);
+const fail = (status, code, message) => { throw Object.assign(new Error(message), { status, code }); };
+function validate(name, value, output = false) {
+  if (!validators[name](value)) fail(output ? 502 : 400, output ? 'MODEL_OUTPUT_INVALID' : 'INVALID_REQUEST', output ? '생성 결과가 API 계약을 만족하지 않습니다.' : '요청이 API 계약을 만족하지 않습니다.');
+  return value;
+}
+function save() {
+  const temp = statePath + '.tmp';
+  fs.writeFileSync(temp, JSON.stringify(state, null, 2), { mode: 0o600 });
+  fs.renameSync(temp, statePath);
+}
+for (const user of Object.values(state.users)) {
+  if (user.workspace.status === 'generating') { user.workspace.status = 'failed'; user.job.status = 'failed'; }
+}
+save();
+function identity(req) {
+  try {
+    if (!/^Bearer [^ ]+$/.test(req.headers.authorization || '')) throw Error();
+    const parts = (req.headers.authorization || '').replace(/^Bearer /, '').split('.');
+    if (parts.length !== 3) throw Error();
+    const header = JSON.parse(Buffer.from(parts[0], 'base64url'));
+    if (header.alg !== 'HS256') throw Error();
+    const expected = crypto.createHmac('sha256', secret).update(parts.slice(0, 2).join('.')).digest();
+    const received = Buffer.from(parts[2], 'base64url');
+    if (received.length !== expected.length || !crypto.timingSafeEqual(received, expected)) throw Error();
+    const claims = JSON.parse(Buffer.from(parts[1], 'base64url'));
+    if (typeof claims.sub !== 'string' || !claims.sub || claims.iss !== 'handoffos-local' || claims.aud !== 'handoffos-api' || !Number.isFinite(claims.exp) || claims.exp <= Date.now() / 1000 || (claims.nbf && claims.nbf > Date.now() / 1000) || claims.teamId !== teamId) throw Error();
+    return claims.sub;
+  } catch { fail(401, 'UNAUTHORIZED', '유효한 Bearer JWT가 필요합니다.'); }
+}
+async function body(req) {
+  let value = '';
+  for await (const chunk of req) { value += chunk; if (Buffer.byteLength(value) > 64000) fail(413, 'INVALID_REQUEST', '요청이 너무 큽니다.'); }
+  try { return JSON.parse(value); } catch { fail(400, 'INVALID_REQUEST', 'JSON 요청이 필요합니다.'); }
+}
+function progress(ws) {
+  const p = ws.progress;
+  p.total = p.checklist.length; p.completed = p.checklist.filter(x => x.completed).length;
+  p.percent = p.total ? Math.floor(100 * p.completed / p.total) : 0;
+  for (const section of ws.sections) {
+    const items = p.checklist.filter(x => x.sectionId === section.id);
+    section.status = ws.status === 'generating' ? 'locked' : items.length && items.every(x => x.completed) ? 'complete' : 'in-progress';
   }
-];
+  return p;
+}
+function getUser(uid) {
+  const user = state.users[hash(uid)];
+  if (!user || user.userId !== uid) fail(404, 'WORKSPACE_NOT_FOUND', '먼저 온보딩을 생성해 주세요.');
+  progress(user.workspace);
+  return user;
+}
+function editable(user) { if (user.workspace.status === 'generating') fail(409, 'GENERATION_IN_PROGRESS', '생성 완료 후 다시 시도하세요.'); }
+function ownQuery(url, uid) {
+  if (!url.searchParams.get('userId')) fail(400, 'INVALID_REQUEST', 'userId가 필요합니다.');
+  if (url.searchParams.get('userId') !== uid) fail(403, 'FORBIDDEN', '다른 사용자의 자료를 조회할 수 없습니다.');
+}
+function workspaceIds(ws) { return new Set([ws.id, ...ws.sections.flatMap(s => [s.id, ...s.blocks.map(b => b.id)]), ...ws.sources.map(s => s.id), ...ws.people.map(p => p.id), ...ws.timelines.map(t => t.projectId)]); }
+async function runAgent(input) {
+  let response;
+  try {
+    response = await fetch(worker + '/internal/run', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + internalToken }, body: JSON.stringify(input), signal: AbortSignal.timeout(input.mode === 'ask' ? 45000 : 180000) });
+  } catch (error) { fail(error.name === 'TimeoutError' ? 504 : 502, error.name === 'TimeoutError' ? 'ASK_TIMEOUT' : 'UPSTREAM_ERROR', 'Orchestrator 응답을 받지 못했습니다.'); }
+  const data = await response.json();
+  if (!response.ok) fail(response.status, data.code || 'UPSTREAM_ERROR', data.message || 'Orchestrator 처리에 실패했습니다.');
+  return data;
+}
+function skeleton(uid) {
+  return { id: 'onboarding-' + hash(uid), status: 'generating', progress: { completed: 0, total: 0, percent: 0, currentSectionId: 'company', lastSeenItemId: null, checklist: [] },
+    sections: sectionIds.map((id, i) => ({ id, number: '0' + (i + 1), title: ['회사 맥락', '팀과 역할', '지금 할 일', '설정과 첫 주', '열린 질문'][i], description: '자료를 검토하고 있습니다.', status: 'locked', blocks: [], sources: [] })), people: [], timelines: [], unknowns: [], sources: [] };
+}
+async function generate(user, input) {
+  try {
+    const output = await runAgent({ mode: 'generate', scope: { userId: user.userId, teamId, sources: input.sourceScope }, role: input.role, question: '', context: {} });
+    const content = output.result;
+    const prefix = hash(teamId + input.role);
+    const existing = new Map(user.workspace.progress.checklist.map(x => [x.id, x]));
+    const itemMap = new Map(content.checklist.map(x => [x.id, prefix + '-' + x.id]));
+    const checklist = content.checklist.map(x => ({ ...x, id: itemMap.get(x.id), completed: existing.get(itemMap.get(x.id))?.completed || false, note: existing.get(itemMap.get(x.id))?.note ?? null }));
+    for (const s of content.sections) for (const b of s.blocks) if (b.type === 'checklist') b.payload.itemIds = b.payload.itemIds.map(id => itemMap.get(id));
+    const next = { id: user.workspace.id, status: 'ready', progress: { ...user.workspace.progress, checklist }, sections: content.sections, people: content.people, timelines: content.timelines, unknowns: content.unknowns, sources: content.sources };
+    if (!checklist.some(x => x.id === next.progress.lastSeenItemId)) next.progress.lastSeenItemId = null;
+    progress(next); validate('OnboardingWorkspace', next, true);
+    user.workspace = next; user.role = input.role; user.sources = input.sourceScope;
+    user.retrievalMode = process.env.HANDOFF_RETRIEVAL_MODE || 'fixture';
+    user.job.status = 'complete'; user.lastRunId = output.runId;
+  } catch (error) {
+    user.workspace.status = 'failed'; user.job.status = 'failed'; progress(user.workspace);
+    console.error(JSON.stringify({ event: 'generation_failed', jobId: user.job.jobId, code: error.code || 'INTERNAL_ERROR' }));
+  } finally { active.delete(user.userId); save(); }
+}
 
-const people = [
-  {
-    id: 'person-jiwoo',
-    name: '박지우',
-    role: '엔지니어링 매니저',
-    relationship: 'manager',
-    avatarUrl: null,
-    links: [sourceLinks[0]],
-    evidence: ['Atlas 팀의 방향을 책임집니다', '주간 제품 싱크를 진행합니다']
-  },
-  {
-    id: 'person-leon',
-    name: '레온 마틴스',
-    role: '스태프 프로덕트 엔지니어',
-    relationship: 'subject-matter-expert',
-    avatarUrl: null,
-    links: [sourceLinks[1]],
-    evidence: ['이벤트 파이프라인을 관리합니다', '데이터 계약의 주요 리뷰어입니다']
-  },
-  {
-    id: 'person-sana',
-    name: '사나 오카포',
-    role: '프로덕트 디자이너',
-    relationship: 'collaborator',
-    avatarUrl: null,
-    links: [sourceLinks[1]],
-    evidence: ['활성화 플로우의 협업 파트너입니다', '고객 리서치를 진행합니다']
-  },
-  {
-    id: 'person-matt',
-    name: '마티아스 홀름',
-    role: '플랫폼 엔지니어',
-    relationship: 'teammate',
-    avatarUrl: null,
-    links: [sourceLinks[0]],
-    evidence: ['로컬 환경 설정의 페어링 파트너입니다', '배포 템플릿을 관리합니다']
-  }
-];
-
-const timelines = [
-  {
-    projectId: 'atlas',
-    title: 'Atlas 활성화 루프',
-    startDate: '2026-03-30',
-    endDate: '2026-04-24',
-    milestones: [
-      { id: 'milestone-contract', title: '이벤트 계약 확정', date: '2026-04-03', status: 'done', ownerIds: ['person-leon'], sourceIds: ['src-drive-architecture'] },
-      { id: 'milestone-pilot', title: '파일럿 워크스페이스 준비', date: '2026-04-10', status: 'next', ownerIds: ['person-jiwoo', 'person-sana'], sourceIds: ['src-slack-launch'] },
-      { id: 'milestone-readout', title: '파일럿 결과 공유', date: '2026-04-24', status: 'future', ownerIds: ['person-sana'], sourceIds: ['src-slack-launch'] }
-    ],
-    owners: [people[0], people[1], people[2]],
-    sources: [sourceLinks[1], sourceLinks[2]]
-  }
-];
-
-const unknowns = [
-  {
-    id: 'unknown-release-owner',
-    question: '파일럿 출시가 늦어질 때 최종 결정은 누가 내리나요?',
-    whyItMatters: '구현 담당자는 명확하지만, 에스컬레이션 경로가 문서화되어 있지 않습니다.',
-    suggestedOwnerId: 'person-jiwoo',
-    evidence: ['출시 스레드에서 언급됨', '릴리스 체크리스트에 담당자 없음'],
-    status: 'open'
-  },
-  {
-    id: 'unknown-metric-definition',
-    question: '주간 제품 리뷰에서 사용하는 활성화 이벤트는 무엇인가요?',
-    whyItMatters: '이벤트 파이프라인에 후보 신호가 두 개 있고, 현재 대시보드가 둘을 섞어 사용합니다.',
-    suggestedOwnerId: 'person-leon',
-    evidence: ['아키텍처 ADR에 두 이벤트가 모두 기록됨', '제품 리뷰 노트에서 활성화 정의가 없음'],
-    status: 'open'
-  },
-  {
-    id: 'unknown-research-cadence',
-    question: '팀은 파일럿 고객과 얼마나 자주 이야기하나요?',
-    whyItMatters: '정기적인 고객 접점이 필요하지만, 노트에 주기만 암시되어 있습니다.',
-    suggestedOwnerId: 'person-sana',
-    evidence: ['파일럿 계획에 고객 세션이 언급됨', '반복 일정 링크를 찾지 못함'],
-    status: 'open'
-  }
-];
-
-const sections = [
-  {
-    id: 'company',
-    number: '01',
-    title: '회사 맥락',
-    description: '우리가 일하는 방식과 제품, 그리고 현재 프로젝트의 배경을 확인합니다.',
-    status: 'complete',
-    blocks: [
-      {
-        id: 'block-company-overview',
-        type: 'paragraph',
-        title: 'Northstar는 함께 배우는 팀을 위한 도구를 만듭니다.',
-        body: '회사는 짧은 피드백 루프를 중심으로 움직입니다. 제품, 디자인, 엔지니어링이 고객 결과에 대한 오너십을 함께 가집니다.',
-        payload: { bullets: ['완벽한 계획보다 빠른 피드백', '모든 팀은 측정 가능한 고객 신호를 책임짐', '기록된 맥락도 제품의 일부'] },
-        sourceIds: ['src-notion-product'],
-        renderHint: 'prose'
-      },
-      {
-        id: 'block-company-callout',
-        type: 'callout',
-        title: '첫 달의 방향은 명확합니다.',
-        body: '활성화 루프를 이해하고, 작은 프로덕션 변경을 배포하고, 고객 대화에 한 번 참여하세요.',
-        payload: { tone: 'accent' },
-        sourceIds: ['src-internal-handbook'],
-        renderHint: 'callout'
+const server = http.createServer(async (req, res) => {
+  const send = (status, value) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); res.end(JSON.stringify(value)); };
+  try {
+    const origin = req.headers.origin;
+    const allowed = (process.env.HANDOFF_WEB_ORIGINS || 'http://localhost:5173,http://127.0.0.1:5173').split(',');
+    if (origin && !allowed.includes(origin)) fail(403, 'FORBIDDEN', '허용되지 않은 브라우저 origin입니다.');
+    if (origin) { res.setHeader('access-control-allow-origin', origin); res.setHeader('vary', 'origin'); }
+    res.setHeader('access-control-allow-headers', 'authorization,content-type');
+    res.setHeader('access-control-allow-methods', 'GET,POST,PATCH,OPTIONS');
+    if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+    const uid = identity(req);
+    const url = new URL(req.url, 'http://127.0.0.1');
+    const pathname = url.pathname;
+    if (url.searchParams.has('include') && url.searchParams.get('include').split(',').some(v => !spec.components.schemas.IncludeValue.enum.includes(v))) fail(400, 'INVALID_REQUEST', 'include 값이 올바르지 않습니다.');
+    if (req.method === 'POST' && pathname === '/v1/onboarding/generate') {
+      const input = validate('GenerateOnboardingRequest', await body(req));
+      if (input.userId !== uid || input.teamId !== teamId) fail(403, 'FORBIDDEN', '사용자 또는 팀 권한이 없습니다.');
+      if (!input.role.trim() || input.role.length > 200 || !input.sourceScope.length || input.sourceScope.includes('internal')) fail(400, 'INVALID_REQUEST', '역할과 slack/notion/drive 범위를 선택하세요. internal 소스는 MVP에서 지원하지 않습니다.');
+      input.sourceScope = [...new Set(input.sourceScope)];
+      let user = state.users[hash(uid)];
+      if (active.has(uid)) { send(202, user.job); return; }
+      if (user?.workspace.status === 'ready' && !input.refresh) { send(202, user.job); return; }
+      if (!user) { user = { userId: uid, workspace: skeleton(uid), role: input.role, sources: input.sourceScope }; state.users[hash(uid)] = user; }
+      user.workspace.status = 'generating'; progress(user.workspace);
+      user.job = { jobId: crypto.randomUUID(), status: 'queued', pollUrl: '/v1/onboarding?userId=' + encodeURIComponent(uid) };
+      active.set(uid, true); save();
+      send(202, validate('GenerationJob', user.job, true));
+      setImmediate(() => { user.job.status = 'running'; save(); generate(user, input); });
+      return;
+    }
+    const user = getUser(uid), ws = user.workspace;
+    // Guard every cached-content route, including workspace/sections/people and ask context.
+    const cachedMode = user.retrievalMode === 'fixture' && (process.env.HANDOFF_RETRIEVAL_MODE || 'fixture') === 'fixture' ? 'fixture' : 'http';
+    await recheckAccess({ scope: { userId: uid, teamId, sources: user.sources }, sourceIds: ws.sources.map(s => s.id) }, { ...process.env, HANDOFF_RETRIEVAL_MODE: cachedMode });
+    if (req.method === 'GET' && pathname === '/v1/onboarding') { ownQuery(url, uid); send(200, validate('OnboardingWorkspace', ws, true)); return; }
+    if (pathname === '/v1/onboarding/progress') {
+      if (req.method === 'GET') { ownQuery(url, uid); send(200, ws.progress); return; }
+      if (req.method === 'PATCH') {
+        editable(user); const input = validate('UpdateProgressRequest', await body(req));
+        if (!Object.keys(input).some(k => ['currentSectionId', 'lastSeenItemId'].includes(k))) fail(400, 'INVALID_REQUEST', '변경할 위치가 필요합니다.');
+        if (input.lastSeenItemId !== undefined && !ws.progress.checklist.some(x => x.id === input.lastSeenItemId)) fail(404, 'NOT_FOUND', '해당 체크리스트가 없습니다.');
+        if (input.currentSectionId !== undefined) ws.progress.currentSectionId = input.currentSectionId;
+        if (input.lastSeenItemId !== undefined) ws.progress.lastSeenItemId = input.lastSeenItemId;
+        save(); send(200, ws.progress); return;
       }
-    ],
-    people: [people[0]],
-    sources: [sourceLinks[0], sourceLinks[3]],
-    timelines: []
-  },
-  {
-    id: 'team-role',
-    number: '02',
-    title: '팀과 역할',
-    description: '함께 일할 사람, 협업 방식, 각자가 책임지는 의사결정을 확인합니다.',
-    status: 'complete',
-    blocks: [
-      {
-        id: 'block-role-summary',
-        type: 'job',
-        title: '프로덕트 엔지니어, Atlas',
-        body: '활성화 경험과 이를 뒷받침하는 이벤트 파이프라인을 함께 다루게 됩니다.',
-        payload: { outcomes: ['활성화 경로를 더 쉽게 이해하도록 만들기', '이벤트 계약을 안정적으로 유지하기', '고객 근거를 주간 의사결정에 반영하기'] },
-        sourceIds: ['src-notion-product', 'src-drive-architecture'],
-        personIds: ['person-jiwoo', 'person-leon'],
-        renderHint: 'card'
-      },
-      {
-        id: 'block-team-people',
-        type: 'person-card',
-        title: '가장 가까운 협업 파트너',
-        body: null,
-        payload: { personIds: ['person-jiwoo', 'person-leon', 'person-sana'] },
-        sourceIds: [],
-        personIds: ['person-jiwoo', 'person-leon', 'person-sana'],
-        renderHint: 'compact-list'
-      }
-    ],
-    people: people.slice(0, 3),
-    sources: [sourceLinks[0], sourceLinks[2]],
-    timelines: []
-  },
-  {
-    id: 'the-job',
-    number: '03',
-    title: '지금 할 일',
-    description: '프로젝트 맥락, 가까운 마일스톤, 그리고 첫 번째 유용한 기여를 확인합니다.',
-    status: 'in-progress',
-    blocks: [
-      {
-        id: 'block-job-process',
-        type: 'process-flow',
-        title: '팀이 움직이는 방식',
-        body: '가벼운 루프를 통해 고객 근거가 구현과 가까이 있도록 합니다.',
-        payload: { steps: ['불편함 관찰하기', '가장 작은 실험 정의하기', '배포하고 측정하기', '신호 리뷰하기'] },
-        sourceIds: ['src-notion-product'],
-        renderHint: 'graph'
-      },
-      {
-        id: 'block-job-timeline',
-        type: 'timeline',
-        title: 'Atlas 활성화 루프',
-        body: '현재 프로젝트 일정과 다음 의사결정 지점입니다.',
-        payload: { projectId: 'atlas' },
-        sourceIds: ['src-slack-launch', 'src-drive-architecture'],
-        renderHint: 'timeline'
-      }
-    ],
-    people: people.slice(0, 3),
-    sources: [sourceLinks[1], sourceLinks[2]],
-    timelines
-  },
-  {
-    id: 'setup',
-    number: '04',
-    title: '설정과 첫 주',
-    description: '접근 권한부터 첫 배포까지, 바로 시작하는 데 필요한 체크리스트입니다.',
-    status: 'in-progress',
-    blocks: [
-      {
-        id: 'block-setup-checklist',
-        type: 'checklist',
-        title: '첫 변경까지 가기',
-        body: '코드베이스를 탐색하기 전에 완료하면 좋은 핵심 설정 단계입니다.',
-        payload: { itemIds: ['item-access', 'item-local', 'item-pair', 'item-ship'] },
-        sourceIds: ['src-internal-handbook'],
-        renderHint: 'compact-list'
-      }
-    ],
-    people: [people[3], people[1]],
-    sources: [sourceLinks[3]],
-    timelines: []
-  },
-  {
-    id: 'unknowns',
-    number: '05',
-    title: '열린 질문',
-    description: '일찍 확인할수록 좋은 문서화 공백과 질문할 사람을 정리했습니다.',
-    status: 'in-progress',
-    blocks: [
-      {
-        id: 'block-unknowns',
-        type: 'unknown-card',
-        title: '확인할 질문',
-        body: '좋은 온보딩 워크스페이스는 이미 아는 것과 대화가 필요한 것을 구분해 보여줍니다.',
-        payload: { unknownIds: unknowns.map((item) => item.id) },
-        sourceIds: ['src-slack-launch', 'src-drive-architecture'],
-        renderHint: 'card'
-      }
-    ],
-    people: people.slice(0, 3),
-    sources: [sourceLinks[1], sourceLinks[2]],
-    timelines: []
-  }
-];
-
-const checklist = [
-  { id: 'item-access', sectionId: 'setup', label: 'Slack, Notion, Drive 접근 권한 확인', completed: true, note: '계정에서 권한을 동기화했습니다' },
-  { id: 'item-local', sectionId: 'setup', label: 'Atlas 워크스페이스 로컬에서 실행', completed: true, note: '로컬 환경이 준비되었습니다' },
-  { id: 'item-pair', sectionId: 'setup', label: 'Leon과 이벤트 파이프라인 페어링', completed: false, note: null },
-  { id: 'item-ship', sectionId: 'setup', label: '작은 프로덕션 변경 하나 배포', completed: false, note: null },
-  { id: 'item-customer', sectionId: 'the-job', label: '파일럿 고객 세션 참여', completed: false, note: null },
-  { id: 'item-review', sectionId: 'the-job', label: '첫 주간 리드아웃 공유', completed: false, note: null },
-  { id: 'item-question', sectionId: 'unknowns', label: '팀과 열린 질문 하나 해결', completed: false, note: null }
-];
-
-const state = {
-  checklist,
-  currentSectionId: 'the-job',
-  lastSeenItemId: 'item-local'
-};
-
-function getProgress() {
-  const completed = state.checklist.filter((item) => item.completed).length;
-  return {
-    completed,
-    total: state.checklist.length,
-    percent: Math.round((completed / state.checklist.length) * 100),
-    currentSectionId: state.currentSectionId,
-    lastSeenItemId: state.lastSeenItemId,
-    checklist: state.checklist
-  };
-}
-
-function getWorkspace() {
-  return {
-    id: 'onboarding-maya-chen',
-    status: 'ready',
-    progress: getProgress(),
-    sections,
-    people,
-    timelines,
-    unknowns,
-    sources: sourceLinks
-  };
-}
-
-function sendJson(response, status, payload) {
-  response.writeHead(status, {
-    'content-type': 'application/json; charset=utf-8',
-    'access-control-allow-origin': '*',
-    'access-control-allow-headers': 'content-type, authorization',
-    'access-control-allow-methods': 'GET, POST, PATCH, OPTIONS'
-  });
-  response.end(JSON.stringify(payload));
-}
-
-function readBody(request) {
-  return new Promise((resolve, reject) => {
-    let value = '';
-    request.on('data', (chunk) => { value += chunk; });
-    request.on('end', () => {
-      if (!value) return resolve({});
-      try { resolve(JSON.parse(value)); } catch (error) { reject(error); }
-    });
-    request.on('error', reject);
-  });
-}
-
-function findPerson(id) {
-  return people.find((person) => person.id === id) || null;
-}
-
-async function handle(request, response) {
-  if (request.method === 'OPTIONS') return sendJson(response, 204, {});
-
-  const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
-  const path = url.pathname;
-
-  if (path === '/health') return sendJson(response, 200, { status: 'ok', service: 'onboarding-mock-api' });
-  if (path === '/v1/onboarding' && request.method === 'GET') return sendJson(response, 200, getWorkspace());
-
-  if (path === '/v1/onboarding/progress' && request.method === 'GET') return sendJson(response, 200, getProgress());
-  if (path === '/v1/onboarding/progress' && request.method === 'PATCH') {
-    const body = await readBody(request);
-    if (body.currentSectionId) state.currentSectionId = body.currentSectionId;
-    if (body.lastSeenItemId) state.lastSeenItemId = body.lastSeenItemId;
-    return sendJson(response, 200, getProgress());
-  }
-
-  if (path === '/v1/onboarding/generate' && request.method === 'POST') {
-    return sendJson(response, 202, { jobId: 'job-refresh-001', status: 'queued', pollUrl: '/v1/onboarding/jobs/job-refresh-001' });
-  }
-
-  if (path === '/v1/onboarding/ask' && request.method === 'POST') {
-    const body = await readBody(request);
-    const question = String(body.question || '').toLowerCase();
-    const answer = question.includes('owner') || question.includes('오너') || question.includes('담당')
-      ? '오너십과 에스컬레이션은 지우에게 먼저 물어보세요. 이벤트 단위의 구현 세부사항은 레온이 가장 잘 설명할 수 있습니다.'
-      : question.includes('setup') || question.includes('설정')
-        ? '설정 체크리스트부터 시작한 뒤, 배포 템플릿은 마티아스와, 이벤트 파이프라인은 레온과 페어링하세요.'
-        : '가장 좋은 다음 단계는 Atlas 아키텍처 의사결정 기록을 읽고, 지우에게 첫 기여와 연결되는 맥락을 물어보는 것입니다.';
-    return sendJson(response, 200, {
-      answer,
-      citations: [sourceLinks[0], sourceLinks[2]],
-      relatedPeople: [people[0], people[1]],
-      suggestedQuestions: ['무엇을 먼저 배포하면 좋을까요?', '활성화 지표의 오너는 누구인가요?', '파일럿에서 아직 모르는 것은 무엇인가요?'],
-      contextUsed: body.context || { currentPath: '/onboarding', sectionId: state.currentSectionId, selectedText: null }
-    });
-  }
-
-  const checklistMatch = path.match(/^\/v1\/onboarding\/checklist\/([^/]+)$/);
-  if (checklistMatch && request.method === 'PATCH') {
-    const itemId = checklistMatch[1];
-    const item = state.checklist.find((entry) => entry.id === itemId);
-    if (!item) return sendJson(response, 404, { code: 'NOT_FOUND', message: 'Checklist item not found', requestId: 'mock-request-404' });
-    const body = await readBody(request);
-    item.completed = Boolean(body.completed);
-    item.note = body.note || item.note;
-    return sendJson(response, 200, { itemId, completed: item.completed, progress: getProgress() });
-  }
-
-  const sectionMatch = path.match(/^\/v1\/onboarding\/sections\/([^/]+)$/);
-  if (sectionMatch && request.method === 'GET') {
-    const section = sections.find((entry) => entry.id === sectionMatch[1]);
-    if (!section) return sendJson(response, 404, { code: 'NOT_FOUND', message: 'Section not found', requestId: 'mock-request-404' });
-    return sendJson(response, 200, section);
-  }
-
-  if (path === '/v1/people' && request.method === 'GET') {
-    const relationship = url.searchParams.get('relationship');
-    const items = relationship && relationship !== 'all' ? people.filter((person) => person.relationship === relationship) : people;
-    return sendJson(response, 200, { items, nextCursor: null });
-  }
-
-  const timelineMatch = path.match(/^\/v1\/projects\/([^/]+)\/timeline$/);
-  if (timelineMatch && request.method === 'GET') {
-    const timeline = timelines.find((entry) => entry.projectId === timelineMatch[1]);
-    if (!timeline) return sendJson(response, 404, { code: 'NOT_FOUND', message: 'Project timeline not found', requestId: 'mock-request-404' });
-    return sendJson(response, 200, timeline);
-  }
-
-  const sourceMatch = path.match(/^\/v1\/sources\/([^/]+)$/);
-  if (sourceMatch && request.method === 'GET') {
-    const source = sourceLinks.find((entry) => entry.id === sourceMatch[1]);
-    if (!source) return sendJson(response, 404, { code: 'NOT_FOUND', message: 'Source not found', requestId: 'mock-request-404' });
-    return sendJson(response, 200, source);
-  }
-
-  if (path === '/v1/onboarding/unknowns' && request.method === 'GET') {
-    const status = url.searchParams.get('status') || 'open';
-    return sendJson(response, 200, { items: unknowns.filter((item) => item.status === status) });
-  }
-
-  if (path === '/v1/onboarding/feedback' && request.method === 'POST') {
-    const body = await readBody(request);
-    return sendJson(response, 201, { ...body, id: 'feedback-mock-001', status: 'received', createdAt: new Date().toISOString() });
-  }
-
-  return sendJson(response, 404, { code: 'NOT_FOUND', message: `No mock route for ${request.method} ${path}`, requestId: 'mock-request-404' });
-}
-
-createServer((request, response) => {
-  handle(request, response).catch((error) => {
-    console.error(error);
-    sendJson(response, 500, { code: 'MOCK_SERVER_ERROR', message: 'The mock server could not process the request', requestId: 'mock-request-500' });
-  });
-}).listen(port, () => {
-  console.log(`Onboarding mock API listening at http://localhost:${port}`);
+    }
+    if (req.method === 'PATCH' && pathname.startsWith('/v1/onboarding/checklist/')) {
+      editable(user); const input = validate('ChecklistMutationRequest', await body(req));
+      const item = ws.progress.checklist.find(x => x.id === decodeURIComponent(pathname.split('/').pop()));
+      if (!item) fail(404, 'NOT_FOUND', '해당 체크리스트가 없습니다.');
+      item.completed = input.completed; if (input.note !== undefined) item.note = input.note;
+      progress(ws); save(); send(200, { itemId: item.id, completed: item.completed, progress: ws.progress }); return;
+    }
+    if (req.method === 'GET' && pathname.startsWith('/v1/onboarding/sections/')) {
+      const section = ws.sections.find(s => s.id === pathname.split('/').pop());
+      if (!section) fail(404, 'NOT_FOUND', '섹션이 없습니다.'); send(200, section); return;
+    }
+    if (req.method === 'POST' && pathname === '/v1/onboarding/ask') {
+      editable(user); const input = validate('AssistantQuestion', await body(req)); const ctx = input.context;
+      if (!input.question.trim() || input.question.length > 4000 || ctx.currentPath.length > 500 || (ctx.entityIds?.length || 0) > 50) fail(400, 'INVALID_REQUEST', '질문 또는 문맥이 너무 길거나 비어 있습니다.');
+      if (ctx.onboardingId !== ws.id || (ctx.sectionId && !sectionIds.includes(ctx.sectionId)) || (ctx.entityIds || []).some(id => !workspaceIds(ws).has(id))) fail(403, 'FORBIDDEN', '워크스페이스 범위 밖의 문맥입니다.');
+      const output = await runAgent({ mode: 'ask', scope: { userId: uid, teamId, sources: user.sources }, role: user.role, question: input.question, context: ctx });
+      send(200, validate('AssistantAnswer', output.result, true)); return;
+    }
+    if (req.method === 'GET' && pathname === '/v1/people') {
+      if (url.searchParams.get('onboardingId') !== ws.id) fail(403, 'FORBIDDEN', '워크스페이스가 일치하지 않습니다.');
+      const relationship = url.searchParams.get('relationship') || 'all', limit = Number(url.searchParams.get('limit') || 20);
+      if (!['all', 'manager', 'teammate', 'collaborator', 'subject-matter-expert'].includes(relationship) || !Number.isInteger(limit) || limit < 1 || limit > 100) fail(400, 'INVALID_REQUEST', '조회 조건이 올바르지 않습니다.');
+      send(200, { items: ws.people.filter(p => relationship === 'all' || p.relationship === relationship).slice(0, limit), nextCursor: null }); return;
+    }
+    if (req.method === 'GET' && /^\/v1\/projects\/[^/]+\/timeline$/.test(pathname)) {
+      const timeline = ws.timelines.find(t => t.projectId === decodeURIComponent(pathname.split('/')[3]));
+      if (!timeline) fail(404, 'NOT_FOUND', '확인된 날짜를 가진 타임라인이 없습니다.'); send(200, timeline); return;
+    }
+    if (req.method === 'GET' && pathname.startsWith('/v1/sources/')) {
+      const source = ws.sources.find(s => s.id === decodeURIComponent(pathname.slice('/v1/sources/'.length)));
+      if (!source) fail(404, 'NOT_FOUND', '접근 가능한 출처가 없습니다.');
+      send(200, source); return;
+    }
+    if (req.method === 'GET' && pathname === '/v1/onboarding/unknowns') {
+      const status = url.searchParams.get('status') || 'open', sectionId = url.searchParams.get('sectionId');
+      if (!['open', 'resolved', 'dismissed'].includes(status) || (sectionId && !sectionIds.includes(sectionId))) fail(400, 'INVALID_REQUEST', '조회 조건이 올바르지 않습니다.');
+      const ids = sectionId ? new Set(ws.sections.find(s => s.id === sectionId).blocks.map(b => b.payload.unknownId).filter(Boolean)) : null;
+      send(200, { items: ws.unknowns.filter(x => x.status === status && (!ids || ids.has(x.id))) }); return;
+    }
+    if (req.method === 'POST' && pathname === '/v1/onboarding/feedback') {
+      editable(user); const input = validate('FeedbackRequest', await body(req));
+      const targets = { section_block: ws.sections.flatMap(s => s.blocks.map(b => b.id)), source: ws.sources.map(s => s.id), person: ws.people.map(p => p.id), unknown: ws.unknowns.map(u => u.id), timeline: ws.timelines.map(t => t.projectId) };
+      if (!targets[input.targetType].includes(input.targetId)) fail(404, 'NOT_FOUND', '피드백 대상이 없습니다.');
+      const feedback = { ...input, id: crypto.randomUUID(), status: 'received', createdAt: new Date().toISOString() };
+      state.feedback.push({ userId: uid, feedback }); save(); send(201, feedback); return;
+    }
+    fail(404, 'NOT_FOUND', '지원하지 않는 API입니다.');
+  } catch (error) { send(error.status || 500, { code: error.code || 'INTERNAL_ERROR', message: error.status ? error.message : '서버 처리에 실패했습니다.', requestId: crypto.randomUUID() }); }
 });
+server.requestTimeout = 60000;
+server.listen(port, '127.0.0.1', () => console.log('HandoffOS API: http://127.0.0.1:' + port));
