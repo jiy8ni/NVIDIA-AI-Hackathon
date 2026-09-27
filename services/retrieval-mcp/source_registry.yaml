@@ -1,0 +1,16 @@
+domains:
+  event_operation:
+    aliases: ["행사", "OT", "신입부원 OT", "MT", "행사 운영"]
+    slack_channels: []
+    notion_roots: []
+    drive_folders: []
+  finance:
+    aliases: ["행사비", "예산", "정산", "계좌", "법인카드", "모임통장"]
+    slack_channels: []
+    notion_roots: []
+    drive_folders: []
+  onboarding:
+    aliases: ["인수인계", "온보딩", "총무 업무", "정기 업무", "업무 절차"]
+    slack_channels: []
+    notion_roots: []
+    drive_folders: []
