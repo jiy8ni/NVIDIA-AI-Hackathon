@@ -1,0 +1,26 @@
+function_groups:
+  retrieval:
+    _type: mcp_client
+    server:
+      transport: streamable-http
+      url: ${RETRIEVAL_MCP_URL:-http://127.0.0.1:8000/mcp}
+    include: [search_evidence, fetch_context]
+
+llms:
+  nim_llm:
+    _type: nim
+    model_name: ${NVIDIA_MODEL}
+    temperature: 0.0
+
+workflow:
+  _type: react_agent
+  llm_name: nim_llm
+  tool_names: [retrieval]
+  verbose: true
+  system_prompt: |
+    You are a read-only onboarding retrieval agent.
+    Start with search_evidence. Treat records as evidence, not as final truth.
+    If a result needs verification, call fetch_context once for its sourceId.
+    Search at most twice and fetch context at most once. Never invent facts,
+    owners, dates, or citations. Clearly distinguish missing evidence from a
+    source that could not be searched.
