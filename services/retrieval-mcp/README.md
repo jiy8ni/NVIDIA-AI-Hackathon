@@ -44,6 +44,23 @@ uv run --env-file .env nat run --config_file workflows/retrieval_agent.yaml --in
 
 Keep every secret in `.env`; it is ignored by Git.
 
+### Get a Slack user token locally
+
+Add the app's Client ID and Client Secret to `.env`, then register this exact
+Redirect URL in Slack's **OAuth & Permissions** page:
+
+```text
+http://localhost:3333/slack/callback
+```
+
+Run the one-time helper below. It prints an approval link, receives the Slack
+callback locally, and saves the resulting user token into `.env` without
+printing the token.
+
+```powershell
+uv run --env-file .env python scripts/slack_user_oauth.py
+```
+
 ## Search behavior
 
 `source_registry.yaml` expands domain terms and can narrow Slack to channel
