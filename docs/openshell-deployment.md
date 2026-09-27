@@ -7,7 +7,7 @@
 | `main` 기준 | 준비됨 | `5164c37`에는 Orchestrator와 Retrieval MCP가 모두 병합됨 |
 | 통합 branch | 검증·push 완료 | `feat/agent-retrieval-integration`에 MCP Provider·테스트·OpenShell 파일을 push함. OpenShell 시작 때 exact HEAD를 pin |
 | Retrieval MCP 연결 | 검증됨 | local Streamable HTTP 연결, `search_evidence`/`fetch_context` 실제 호출. source OAuth 없음은 `missing_credentials`로 분리 |
-| NVIDIA 모델 HTTP adapter | mock 계약 검증됨 | 실제 `NVIDIA_API_KEY`·선택 model tokenizer가 없으므로 live inference는 미검증 |
+| NVIDIA 모델 HTTP adapter | live failure-path 확인 | 키로 model 목록 조회는 성공했으나 Chat Completions가 HTTP 410 → `MODEL_UNAVAILABLE`; Public API Endpoints entitlement 또는 self-hosted NIM이 필요 |
 | OpenShell CLI/gateway/sandbox | 호스트 차단 | WSL Ubuntu 설치를 시작했지만 현재 WSL service의 distro 열거가 `E_ACCESS_DENIED`를 반환한다. 재부팅/관리자 세션에서 설치 완료 후 Docker·CLI를 설치해야 함 |
 | NemoClaw | 범위 밖 | HandoffOS는 custom Orchestrator; NemoClaw/OpenClaw blueprint 설치·실행을 주장하지 않음 |
 
@@ -59,7 +59,7 @@ HandoffOS sandbox에는 Slack·Notion·Drive credential을 넣지 않는다. 그
 - [x] Nemotron JSON request/재시도 테스트
 - [x] 검증 branch 원격 push (OpenShell clone 가능)
 - [ ] 실제 MCP source OAuth와 per-user ACL staging 테스트 (지윤과 공동)
-- [ ] 실제 NVIDIA key·모델·matching tokenizer로 live generate/ask (민성)
+- [ ] Public API Endpoints entitlement 또는 self-hosted NIM에서 matching tokenizer로 live generate/ask 성공 (민성)
 
 ### OpenShell sandbox를 만들기 전에
 

@@ -6,6 +6,7 @@ import re
 import time
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from .contracts import AgentError, RetrievalResponse
 from .models import make_model
 from .providers import ROOT, make_provider, provider_of, safe_url
@@ -18,7 +19,7 @@ class Orchestrator:
     def __init__(self, provider=None, model=None, trace_dir=None):
         self.provider = provider or make_provider()
         self.model = model or make_model()
-        self.trace_dir = trace_dir or ROOT / '.runtime' / 'traces'
+        self.trace_dir = Path(trace_dir) if trace_dir else ROOT / '.runtime' / 'traces'
 
     async def run(self, request):
         run_id = str(uuid.uuid4())

@@ -104,6 +104,11 @@ def test_context_budget_reports_truncation(tmp_path):
     assert truncated and len(visible['x'].content) < len(row.content)
     assert packed[0]['content'] == visible['x'].content
 
+def test_string_trace_dir_is_normalized_to_path(tmp_path):
+    output = asyncio.run(Orchestrator(trace_dir=str(tmp_path)).run(request('ask', '자료?')))
+    assert output['runId']
+    assert list(tmp_path.glob('*.json'))
+
 def test_nemotron_never_falls_back_without_key(monkeypatch):
     monkeypatch.setenv('HANDOFF_MODEL_MODE', 'nemotron'); monkeypatch.delenv('NVIDIA_API_KEY', raising=False)
     with pytest.raises(AgentError) as error: make_model()
