@@ -29,6 +29,12 @@ In another terminal, run the NVIDIA Agent Toolkit workflow:
 uv run --env-file .env nat run --config_file workflows/retrieval_agent.yaml --input "총무의 행사비 정산 절차를 찾아줘"
 ```
 
+## NeMoTron / NIM integration
+
+See [`docs/neomotron-retrieval-mcp.md`](../../docs/neomotron-retrieval-mcp.md)
+for environment setup, running the included NeMo Agent Toolkit workflow, and
+adding this MCP server to another NeMoTron agent.
+
 ## Credentials
 
 - Slack: create a user OAuth token with `search:read.public` and, when needed,
