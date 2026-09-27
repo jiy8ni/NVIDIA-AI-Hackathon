@@ -63,6 +63,14 @@ class SlackAdapter:
             raise AdapterFailure(self.source, payload.get("error", "slack_api_error"), "Slack search or context lookup failed.")
         return payload
 
+    async def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        async with httpx.AsyncClient(timeout=20) as client:
+            response = await client.post(f"https://slack.com/api/{path}", headers=self._headers(), json=payload)
+        body = response.json()
+        if response.status_code >= 400 or not body.get("ok"):
+            raise AdapterFailure(self.source, body.get("error", "slack_api_error"), "Slack search or context lookup failed.")
+        return body
+
     @staticmethod
     def _source_id(channel_id: str, ts: str, is_thread: bool) -> str:
         prefix = "slack-thread" if is_thread else "slack"
@@ -75,7 +83,7 @@ class SlackAdapter:
     def _evidence(self, message: dict[str, Any], *, thread: bool = False) -> Evidence:
         channel = message.get("channel")
         channel_id = (channel.get("id") if isinstance(channel, dict) else channel) or message.get("channel_id") or "unknown"
-        ts = str(message.get("ts") or message.get("thread_ts") or "unknown")
+        ts = str(message.get("message_ts") or message.get("ts") or message.get("thread_ts") or "unknown")
         thread_ts = str(message.get("thread_ts") or ts)
         is_thread = thread or bool(message.get("thread_ts"))
         return Evidence(
@@ -83,43 +91,43 @@ class SlackAdapter:
             sourceType="slack_thread" if is_thread else "slack_message",
             title=None,
             titleOrigin="unavailable",
-            content=clean_text(message.get("text")),
+            content=clean_text(message.get("content") or message.get("text")),
             contentOrigin="source_excerpt",
             url=self._permalink(channel_id, ts, message.get("permalink")),
             createdAt=parse_time(ts),
             updatedAt=parse_time(message.get("edited", {}).get("ts")) or parse_time(ts),
             retrievedAt=utc_now(),
-            author=PersonRef(id=message.get("user"), name=message.get("username")),
+            author=PersonRef(id=message.get("author_user_id") or message.get("user"), name=message.get("author_name") or message.get("username")),
             owner=PersonRef(),
             extractionStatus="complete",
             accessStatus="accessible",
         )
 
     async def search(self, request: SearchRequest, hints: SearchHints, cursor: str | None) -> SourceResult:
-        # A Slack query can only narrow to one channel at a time. Search the configured
-        # channels independently so `in:channel-a in:channel-b` never becomes an AND.
-        channel_scopes = hints.slack_channels[:3] or [None]
-        records: list[Evidence] = []
-        next_cursor: str | None = None
-        for index, channel in enumerate(channel_scopes):
-            query = request.query + (f" in:{channel}" if channel else "")
-            if request.time_range and request.time_range.start:
-                query += f" after:{request.time_range.start.date().isoformat()}"
-            if request.time_range and request.time_range.end:
-                query += f" before:{request.time_range.end.date().isoformat()}"
-            payload = await self._get(
-                "search.messages",
-                {
-                    "query": query,
-                    "count": min(max(request.limit * 3, 20), 100),
-                    "cursor": cursor if index == 0 and cursor else "*",
-                    "sort": "score",
-                },
-            )
-            records.extend(self._evidence(message) for message in payload.get("messages", {}).get("matches", []) if clean_text(message.get("text")))
-            if index == 0:
-                next_cursor = payload.get("response_metadata", {}).get("next_cursor") or None
-        return SourceResult(records=records, next_cursor=next_cursor)
+        query = request.query
+        if request.time_range and request.time_range.start:
+            query += f" after:{request.time_range.start.date().isoformat()}"
+        if request.time_range and request.time_range.end:
+            query += f" before:{request.time_range.end.date().isoformat()}"
+
+        payload = await self._post(
+            "assistant.search.context",
+            {
+                "query": query,
+                "channel_types": ["public_channel", "private_channel"],
+                "content_types": ["messages"],
+                "include_context_messages": False,
+                "limit": request.limit,
+                "cursor": cursor or "",
+                "sort": "score",
+            },
+        )
+        records = [
+            self._evidence(message)
+            for message in payload.get("results", {}).get("messages", [])
+            if clean_text(message.get("content"))
+        ]
+        return SourceResult(records=records, next_cursor=payload.get("response_metadata", {}).get("next_cursor") or None)
 
     async def fetch_context(self, source_id: str) -> SourceResult:
         match = re.fullmatch(r"slack(?:-thread)?:([^:]+):(.+)", source_id)

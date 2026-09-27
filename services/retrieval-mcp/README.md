@@ -31,8 +31,10 @@ uv run --env-file .env nat run --config_file workflows/retrieval_agent.yaml --in
 
 ## Credentials
 
-- Slack: create a user OAuth token with `search:read` plus the read scopes for
-  the channels, DMs, and threads the demo account may inspect.
+- Slack: create a user OAuth token with `search:read.public` and, when needed,
+  `search:read.private`; add `channels:history` and `groups:history` so a
+  selected thread can be expanded. The server uses Slack's current
+  `assistant.search.context` API, not the legacy `search.messages` endpoint.
 - Notion: create an Integration and explicitly share target pages and data
   sources with it. The in-memory index only covers pages visible to that
   Integration and is rebuilt after its TTL or by calling `search_evidence` with
