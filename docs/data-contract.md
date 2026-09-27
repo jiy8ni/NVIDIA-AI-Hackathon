@@ -37,7 +37,10 @@ HTTP provider는 설정된 `HANDOFF_RETRIEVAL_URL`에 다음 JSON을 POST합니�
 - fixture의 query `*`는 가상 조직 전체 조회입니다. 실제 provider에서 지원할지 합의하거나 provider 내부에서 치환해야 합니다.
 - 인증은 HANDOFF_RETRIEVAL_TOKEN Bearer. 실제 provider는 호출자와 원본 ACL을 독립 검증해야 합니다.
 - 요청 필드나 프로토콜이 다르면 HttpProvider만 조정하고 공개 API·합성 코드는 유지합니다.
-- 기존 프로세스 내부 Python 함수나 MCP로 제공할 경우 `search(query,sources,cursor,scope,request_id)` 인터페이스를 구현하면 됩니다. **현재 구현은 실제 MCP 서버가 아닙니다.**
+- `HANDOFF_RETRIEVAL_MODE=mcp`이면 Python Orchestrator의 `McpProvider`가 실제 Streamable HTTP Retrieval MCP의 `search_evidence`를 호출합니다. MCP 도구의 `requestId`는 내부 프로토콜 값이므로, MCP의 request/response 대응이 완료된 뒤 Orchestrator 요청 ID로 경계에서 정규화합니다. 이 규약의 frozen 필드에는 변함이 없습니다.
+- MCP가 source별 recoverable error를 `coverage.status=partial`로 표현하면, 경계는 frozen enum에 맞게 coverage를 `searched`로 정규화하고 `status=partial` 및 `errors`는 그대로 보존합니다. 도구가 scope 밖 Evidence나 누락된 coverage를 돌려주면 fail closed합니다.
+- `source_excerpt` 또는 `extractionStatus=partial` 결과는 `fetch_context`로 **요청당 최대 한 번**만 보강할 수 있습니다. 이는 불완전한 evidence를 확인하는 Provider 동작이며, 모델의 `read_more` (이미 받은 원문의 다음 구간을 로컬에서 보는 행동)와 다릅니다. 보강 실패는 기존 excerpt를 버리지 않되 `partial/context_unavailable`로 표시합니다.
+- 현재 Retrieval MCP에는 사용자별 MCP 인증·ACL bridge가 구현되어 있지 않습니다. 실제 SaaS 자료를 샌드박스에서 조회하기 전에는 Retrieval MCP 자체를 사설 네트워크/인증 뒤에 두고, 사용자별 ACL 재검증을 구현해야 합니다.
 
 ## 상태 의미 및 보완 처리
 

@@ -10,9 +10,9 @@ flowchart LR
   Runtime -->|"native 기본"| O["Orchestrator"]
   Runtime -->|"nat 선택 / 실행 검증됨"| NAT["NeMo Agent Toolkit function"]
   NAT --> O
-  O --> Provider["읽기 전용 Retrieval adapter"]
+  O --> Provider["읽기 전용 Retrieval adapter<br/>fixture / HTTP / Streamable MCP"]
   Provider --> Fixture["가상 Slack·Notion·Drive"]
-  Provider -. "실제 연결 필요" .-> Ingestion["지윤: ingestion / MCP / ACL"]
+  Provider -->|"mcp: search_evidence<br/>필요 시 fetch_context 1회"| Ingestion["지윤: Retrieval MCP / ingestion / ACL"]
   O --> Model["Offline 추출 또는 Nemotron API"]
   O --> Verify["인용·Task 필드·출처 검증"]
   Verify --> Content["GeneratedContent / AssistantAnswer"]
@@ -63,8 +63,13 @@ sequenceDiagram
   API-->>FE: 202 jobId, status, pollUrl
   API->>O: background generate
   loop 제한된 근거 탐색·검토
-    O->>R: 검색 또는 다음 페이지
-    R-->>O: 최종 RetrievalResponse
+  O->>R: 검색 또는 다음 페이지
+    R->>Ingestion: MCP search_evidence
+    opt excerpt 또는 partial evidence 1건
+      R->>Ingestion: MCP fetch_context
+    end
+    Ingestion-->>R: RetrievalResponse
+    R-->>O: frozen RetrievalResponse 검증본
     O->>O: 평가 / 필요하면 추가 탐색
   end
   O-->>API: 검증된 GeneratedContent
@@ -104,7 +109,7 @@ generate의 최초/추가 검색 예산은 총합 7회로 합쳐 관리합니다
 
 - `services/orchestrator/handoff/engine.py`: 상태·선택·제한·원문 registry.
 - `contracts.py`: 확정 입력 및 내부 합성 타입.
-- `providers.py`: Fixture/HTTP retrieval 경계.
+- `providers.py`: Fixture/HTTP/Streamable-MCP retrieval 경계. MCP 도구·응답의 불일치가 공개 API로 새지 않도록 contract validation과 scope 검사를 수행한다.
 - `models.py`: offline 기준선 / Nemotron JSON 결정·합성.
 - `projection.py`, `entities.py`: 인용·Task 관계·인물·일정 검증과 공개 응답 변환.
 - `api.py`: 내부 인증·worker 진입점.
@@ -112,4 +117,4 @@ generate의 최초/추가 검색 예산은 총합 7회로 합쳐 관리합니다
 - `services/api/server.mjs`: 기존 공개 API 구현.
 - `export_pdf.py`: 저장된 콘텐츠의 PDF 변환.
 
-NemoClaw/OpenShell·NeMo Retriever는 설치하거나 실행하지 않았습니다. 기본 로컬 경계가 OpenShell 샌드박스와 동등하다고 주장하지 않습니다.
+NemoClaw은 이 MVP의 필수 런타임이 아니다. 현재 준비한 OpenShell 배포 경계·실행 계획은 [`openshell-deployment.md`](openshell-deployment.md)에 있으며, OpenShell Gateway/Sandbox 실제 실행은 호스트 요건을 갖춘 뒤에만 주장한다. 기본 로컬 경계가 OpenShell 샌드박스와 동등하다고 주장하지 않습니다.

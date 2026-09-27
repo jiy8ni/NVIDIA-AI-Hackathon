@@ -1,0 +1,42 @@
+version: 1
+
+# Static boundary: the app is installed outside the writable worktree and
+# source/runtime data may only be created beneath /sandbox or /tmp.
+filesystem_policy:
+  include_workdir: true
+  read_only: [/usr, /lib, /lib64, /etc, /app, /opt, /var/log, /proc/self, /dev/urandom]
+  read_write: [/sandbox, /tmp, /dev/null]
+
+landlock:
+  compatibility: best_effort
+
+# This policy deliberately has no broad internet rule. The NVIDIA provider
+# contributes its own endpoint-bound rule. Change retrieval-mcp.internal to
+# the approved TLS DNS name before applying and validate with policy prove.
+network_policies:
+  github_clone_readonly:
+    name: github-clone-readonly
+    endpoints:
+      - host: github.com
+        port: 443
+        protocol: rest
+        tls: terminate
+        enforcement: enforce
+        rules:
+          - allow: { method: GET, path: "/jiy8ni/NVIDIA-AI-Hackathon.git/info/refs*" }
+          - allow: { method: POST, path: "/jiy8ni/NVIDIA-AI-Hackathon.git/git-upload-pack" }
+    binaries:
+      - { path: /usr/bin/git }
+  retrieval_mcp_readonly:
+    name: retrieval-mcp-readonly
+    endpoints:
+      - host: retrieval-mcp.internal
+        port: 443
+        protocol: rest
+        tls: terminate
+        enforcement: enforce
+        rules:
+          - allow: { method: POST, path: "/mcp" }
+    binaries:
+      - { path: /opt/handoff-venv/bin/python }
+      - { path: /usr/bin/python3 }

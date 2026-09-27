@@ -38,6 +38,32 @@ node scripts/dev.mjs
 
 기본 실행 trace는 자체 JSON 이벤트입니다. NAT profiler/OTel 연동까지 검증한 것은 아닙니다.
 
+## Retrieval MCP 연결
+
+`HANDOFF_RETRIEVAL_MODE=mcp`는 Orchestrator가 Streamable HTTP MCP에 직접 연결하는 읽기 전용 Provider입니다. MCP는 `search_evidence`를 호출하고, 결과가 excerpt/partial일 때만 `fetch_context`를 요청당 한 번 호출합니다. 모델의 네 가지 루프 행동(`search`, `next_page`, `read_more`, `finish`)을 늘리지 않습니다. `read_more`는 이미 받은 원문을 로컬에서 더 보는 행동입니다.
+
+```powershell
+# Orchestrator 환경 (native 실행에도 필요)
+python -m pip install -e '.[mcp]'
+
+# Retrieval MCP 환경에서 별도 실행
+cd services/retrieval-mcp
+uv sync --extra nat
+uv run --env-file .env retrieval-mcp
+
+# HandoffOS root .env 또는 OpenShell의 비밀/환경 주입 설정
+HANDOFF_RETRIEVAL_MODE=mcp
+RETRIEVAL_MCP_URL=http://127.0.0.1:8000/mcp
+```
+
+`http://`는 loopback 개발에서만 허용합니다. 다른 호스트에서는 TLS URL을 사용하며, Orchestrator는 coverage·source 범위·Evidence enum을 검증해 계약 밖 응답을 차단합니다. Retrieval MCP의 현재 구현은 source OAuth credential 미설정 시 `missing_credentials`를 반환합니다. 이는 MCP 연결 실패가 아니라 source 접근 실패입니다.
+
+2026-09-28 검증: MCP Python client 1.30.0으로 local `http://127.0.0.1:8000/mcp`에 연결하고 `search_evidence`, `fetch_context`를 실제 호출했다. Slack credential을 일부러 주입하지 않은 상태라 두 도구가 각각 `missing_credentials`를 반환하는 것을 확인했다. excerpt의 full-context 보강, scope 초과 차단, coverage enum 정규화는 자동 테스트로 검증했다. 실제 조직 OAuth/ACL과 live NVIDIA API 호출은 이 검증에 포함되지 않는다.
+
+## OpenShell 배포 준비
+
+OpenShell 준비 파일과 실제 gateway 전제 조건은 [`openshell-deployment.md`](openshell-deployment.md), [`../deploy/openshell/README.md`](../deploy/openshell/README.md)를 따른다. NVIDIA API 키는 `.env`, image, GitHub에 넣지 않고 OpenShell의 `nvidia` Provider로만 넣는다. NemoClaw은 OpenClaw/Hermes를 OpenShell에서 실행하는 별도 blueprint이므로, HandoffOS의 custom Python Orchestrator를 NemoClaw라고 부르거나 설치 완료로 표기하지 않는다.
+
 ## Creative Use-case 제출 판단
 
 | 채점 축 | 이번 구현의 증거 | 제출 전 보완 |

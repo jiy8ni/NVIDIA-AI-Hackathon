@@ -117,6 +117,9 @@ class Orchestrator:
             rid = str(uuid.uuid4())
             result = await self.provider.search(query, sources, next_cursor, request.scope, rid)
             search_count += 1
+            drain_events = getattr(self.provider, 'drain_events', None)
+            if drain_events:
+                trace['events'].extend(drain_events())
             result = RetrievalResponse.model_validate(result)
             if result.requestId != rid:
                 raise AgentError('RETRIEVAL_INVALID', '검색 응답 requestId가 일치하지 않습니다.')
