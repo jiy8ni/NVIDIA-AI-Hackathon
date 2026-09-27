@@ -347,7 +347,11 @@ class DriveAdapter:
                 },
             )
         if response.status_code >= 400:
-            raise AdapterFailure(self.source, "oauth_refresh_failed", "Google OAuth token refresh failed.")
+            try:
+                code = response.json().get("error", "oauth_refresh_failed")
+            except ValueError:
+                code = "oauth_refresh_failed"
+            raise AdapterFailure(self.source, str(code), "Google OAuth token refresh failed.")
         self.access_token = response.json().get("access_token")
         if not self.access_token:
             raise AdapterFailure(self.source, "oauth_refresh_failed", "Google OAuth returned no access token.")
@@ -359,7 +363,14 @@ class DriveAdapter:
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.request(method, url, headers=headers, **kwargs)
         if response.status_code >= 400:
-            raise AdapterFailure(self.source, "drive_api_error", "Google Drive search or file lookup failed.")
+            try:
+                error = response.json().get("error", {})
+                code = error.get("status") or error.get("code") or "drive_api_error"
+                message = error.get("message") or "Google Drive search or file lookup failed."
+            except ValueError:
+                code = "drive_api_error"
+                message = "Google Drive search or file lookup failed."
+            raise AdapterFailure(self.source, str(code).lower(), message)
         return response
 
     @staticmethod
