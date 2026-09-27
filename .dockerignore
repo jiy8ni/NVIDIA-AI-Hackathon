@@ -1,0 +1,9 @@
+.git
+.venv
+**/.venv
+**/node_modules
+.runtime
+output
+.env
+services/retrieval-mcp/.env
+services/api/package-lock.local.json
