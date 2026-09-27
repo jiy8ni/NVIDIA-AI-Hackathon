@@ -1,0 +1,10 @@
+pydantic>=2.10,<3
+fastapi>=0.115,<1
+uvicorn>=0.34,<1
+httpx>=0.28,<1
+PyYAML>=6,<7
+jsonschema>=4,<5
+reportlab>=4,<5
+tokenizers>=0.21,<1
+pytest>=8,<10
+pypdf>=5,<7

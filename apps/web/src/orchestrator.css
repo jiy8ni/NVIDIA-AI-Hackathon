@@ -1,0 +1,22 @@
+.mode-banner { border: 1px solid #6388a6; border-radius: 9px; padding: 12px 16px; margin-bottom: 24px; font-size: 13px; }
+.start-card input { width: 100%; margin: 12px 0 22px; padding: 12px; color: inherit; background: transparent; border: 1px solid #718097; border-radius: 6px; }
+.claim-badge { display: inline-block; font-size: 11px; border: 1px solid currentColor; border-radius: 5px; padding: 2px 6px; margin-right: 5px; vertical-align: middle; }
+.claim-FACT { color: #469d83; } .claim-UNKNOWN { color: #bd8832; } .claim-INFERENCE { color: #b387d9; } .claim-SUGGESTION { color: #668ded; }
+.task-field { margin: 12px 0; display: grid; grid-template-columns: 80px 1fr; gap: 12px; } .task-field dd { margin: 0; }
+.content-block details { margin-top: 20px; } .content-block summary { cursor: pointer; }
+.content-block blockquote { border-left: 3px solid #718097; padding: 4px 18px; margin: 14px 0; }
+.block-evidence { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 0 20px; }
+.review-button { color: inherit; background: transparent; border: 1px solid #657083; border-radius: 5px; padding: 5px 9px; cursor: pointer; font-size: 12px; }
+.selection-context { margin: 16px 0; padding: 12px; border: 1px solid #718097; border-radius: 8px; }
+.answer > p { white-space: pre-wrap; overflow-wrap: anywhere; } .citation-row a { color: #789ee8; font-size: 13px; }
+.content-block p, .task-field dd { overflow-wrap: anywhere; } .assistant-dialog { max-height: 85vh; overflow-y: auto; }
+button:disabled { opacity: .6; cursor: wait; }
+.section-outline, .block-stack, .content-block-anchor { min-width: 0; }
+.content-block strong, .source-chip { overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .section-content-layout { grid-template-columns: minmax(0, 1fr); }
+  .section-outline { max-width: 100%; overflow: hidden; }
+  .topbar { height: auto; min-height: 80px; flex-wrap: wrap; gap: 8px; padding-top: 12px; padding-bottom: 12px; }
+  .topbar-actions { flex-wrap: wrap; } .refresh-button { font-size: 10px; }
+  .task-field { grid-template-columns: 1fr; } .content-block { padding: 16px; }
+}

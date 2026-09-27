@@ -1,0 +1,6 @@
+# Optional trusted local CLI workflow, not a second public HTTP API.
+workflow:
+  _type: handoffos
+  user_id: kim-juhyung
+  team_id: atlas
+  sources: [slack, notion, drive]

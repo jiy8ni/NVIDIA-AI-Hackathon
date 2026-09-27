@@ -1,0 +1,163 @@
+[
+  {
+    "schemaVersion": "1.0",
+    "sourceId": "notion:company",
+    "sourceType": "notion_page",
+    "title": "가상 조직 Atlas 소개",
+    "titleOrigin": "source",
+    "content": "회사: Atlas는 행사 운영 도구를 만드는 가상 스타트업입니다.\n팀: 운영 담당자는 행사 준비와 정산 자료 정리를 지원합니다.",
+    "contentOrigin": "source_full_text",
+    "url": "https://example.com/fixtures/notion%3Acompany",
+    "createdAt": "2026-09-01T10:00:00+09:00",
+    "updatedAt": "2026-09-22T14:30:00+09:00",
+    "retrievedAt": "2026-09-26T12:00:00+09:00",
+    "author": {
+      "id": null,
+      "name": null
+    },
+    "owner": {
+      "id": null,
+      "name": null
+    },
+    "extractionStatus": "complete",
+    "accessStatus": "accessible"
+  },
+  {
+    "schemaVersion": "1.0",
+    "sourceId": "notion:account",
+    "sourceType": "notion_page",
+    "title": "기존 행사비 인수인계",
+    "titleOrigin": "source",
+    "content": "행사비 정산에는 모임통장을 사용합니다.",
+    "contentOrigin": "source_full_text",
+    "url": "https://example.com/fixtures/notion%3Aaccount",
+    "createdAt": "2026-09-01T10:00:00+09:00",
+    "updatedAt": "2026-08-01T10:00:00+09:00",
+    "retrievedAt": "2026-09-26T12:00:00+09:00",
+    "author": {
+      "id": null,
+      "name": null
+    },
+    "owner": {
+      "id": null,
+      "name": null
+    },
+    "extractionStatus": "complete",
+    "accessStatus": "accessible"
+  },
+  {
+    "schemaVersion": "1.0",
+    "sourceId": "slack:C123:1710000000.000",
+    "sourceType": "slack_thread",
+    "title": "법인 계좌 전환 논의",
+    "titleOrigin": "generated",
+    "content": "2026-09-22 대협: 법인 계좌로 전환하는 방안을 검토하고 있습니다. 최종 승인과 시행일은 아직 미정입니다.\n2026-09-22 지윤: 기존 인수인계의 모임통장 안내를 바꾸기 전에 승인 담당자를 확인해야 합니다.",
+    "contentOrigin": "source_full_text",
+    "url": "https://example.com/fixtures/slack%3AC123%3A1710000000.000",
+    "createdAt": "2026-09-01T10:00:00+09:00",
+    "updatedAt": "2026-09-22T14:30:00+09:00",
+    "retrievedAt": "2026-09-26T12:00:00+09:00",
+    "author": {
+      "id": "user-01",
+      "name": "대협"
+    },
+    "owner": {
+      "id": null,
+      "name": null
+    },
+    "extractionStatus": "complete",
+    "accessStatus": "accessible"
+  },
+  {
+    "schemaVersion": "1.0",
+    "sourceId": "drive:meeting",
+    "sourceType": "drive_document",
+    "title": "행사 준비 회의록",
+    "titleOrigin": "source",
+    "content": "업무: 행사 정산 자료 정리 | 목적: 지난 행사 지출 근거 확인 | 담당자: 미정 | 기한: 미정 | 다음 행동: 지출 증빙 목록 확인\n업무: 첫 주 개발 환경 확인 | 목적: 개발 준비 | 담당자: 미정 | 기한: 미정 | 다음 행동: 설정 문서 읽기 | 완료 조건: 로컬 테스트 통과\n업무: 정산 검토 요청 | 목적: 증빙 누락 확인 | 담당자: 미정 | 기한: 미정 | 다음 행동: 승인 담당자 확인 | 선행 업무: 행사 정산 자료 정리 | 차단 요소: 승인 담당자 미확정\n인물: 대협 | 역할: 운영팀장 | 관계: 협업자 | 대상 역할: 운영 담당자\n프로젝트: 가을 행사 | 일정: 증빙 검토 회의 | 날짜: 2026-10-02 | 상태: 예정",
+    "contentOrigin": "source_full_text",
+    "url": "https://example.com/fixtures/drive%3Ameeting",
+    "createdAt": "2026-09-01T10:00:00+09:00",
+    "updatedAt": "2026-09-22T14:30:00+09:00",
+    "retrievedAt": "2026-09-26T12:00:00+09:00",
+    "author": {
+      "id": null,
+      "name": null
+    },
+    "owner": {
+      "id": null,
+      "name": null
+    },
+    "extractionStatus": "complete",
+    "accessStatus": "accessible"
+  },
+  {
+    "schemaVersion": "1.0",
+    "sourceId": "notion:setup",
+    "sourceType": "notion_page",
+    "title": "개발 설정과 코드 컨벤션",
+    "titleOrigin": "source",
+    "content": "설정: 저장소 README 순서에 따라 의존성을 설치하고 로컬 테스트를 실행합니다.\n컨벤션: 공개 API JSON 필드명은 camelCase를 사용합니다.",
+    "contentOrigin": "source_full_text",
+    "url": "https://example.com/fixtures/notion%3Asetup",
+    "createdAt": "2026-09-01T10:00:00+09:00",
+    "updatedAt": "2026-09-22T14:30:00+09:00",
+    "retrievedAt": "2026-09-26T12:00:00+09:00",
+    "author": {
+      "id": null,
+      "name": null
+    },
+    "owner": {
+      "id": null,
+      "name": null
+    },
+    "extractionStatus": "complete",
+    "accessStatus": "accessible"
+  },
+  {
+    "schemaVersion": "1.0",
+    "sourceId": "drive:handbook",
+    "sourceType": "pdf_chunk",
+    "title": "운영 매뉴얼.pdf",
+    "titleOrigin": "source",
+    "content": "업무 정산 자료는 증빙 파일과 해당 행사명을 함께 기록합니다.",
+    "contentOrigin": "parsed_text",
+    "url": "https://example.com/fixtures/drive%3Ahandbook",
+    "createdAt": "2026-09-01T10:00:00+09:00",
+    "updatedAt": "2026-09-22T14:30:00+09:00",
+    "retrievedAt": "2026-09-26T12:00:00+09:00",
+    "author": {
+      "id": null,
+      "name": null
+    },
+    "owner": {
+      "id": null,
+      "name": null
+    },
+    "extractionStatus": "complete",
+    "accessStatus": "accessible"
+  },
+  {
+    "schemaVersion": "1.0",
+    "sourceId": "drive:handbook",
+    "sourceType": "pdf_chunk",
+    "title": "운영 매뉴얼.pdf",
+    "titleOrigin": "source",
+    "content": "업무 정산의 승인 담당자는 이 자료에 명시되지 않았습니다.",
+    "contentOrigin": "parsed_text",
+    "url": "https://example.com/fixtures/drive%3Ahandbook",
+    "createdAt": "2026-09-01T10:00:00+09:00",
+    "updatedAt": "2026-09-22T14:30:00+09:00",
+    "retrievedAt": "2026-09-26T12:00:00+09:00",
+    "author": {
+      "id": null,
+      "name": null
+    },
+    "owner": {
+      "id": null,
+      "name": null
+    },
+    "extractionStatus": "complete",
+    "accessStatus": "accessible"
+  }
+]
