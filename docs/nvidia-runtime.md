@@ -8,12 +8,14 @@
 HANDOFF_MODEL_MODE=nemotron
 NVIDIA_API_KEY=실제 키 (커밋 금지)
 NVIDIA_MODEL=선택한_endpoint에서_허용된_모델_ID
+NVIDIA_FALLBACK_MODEL=
 NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
 NVIDIA_TOKENIZER_PATH=C:/absolute/path/to/tokenizer.json
 NVIDIA_CONTEXT_TOKENS=32768
 NVIDIA_TIMEOUT_SECONDS=60
-HANDOFF_ASK_TIMEOUT_SECONDS=120
-HANDOFF_GENERATE_TIMEOUT_SECONDS=240
+NVIDIA_SYNTHESIS_TIMEOUT_SECONDS=150
+HANDOFF_ASK_TIMEOUT_SECONDS=180
+HANDOFF_GENERATE_TIMEOUT_SECONDS=360
 ```
 
 모델과 동일한 tokenizer.json을 제공하세요. 코드가 임의 모델 tokenizer를 내려받거나 문자 수를 live token 수로 가장하지 않습니다. 컨텍스트 길이는 endpoint의 허용 범위 이내로 설정합니다. 키/모델/tokenizer가 없거나 모델 응답이 실패하면 오류를 반환하며 offline 답으로 몰래 바꾸지 않습니다.
