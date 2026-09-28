@@ -10,9 +10,14 @@ from retrieval_mcp.service import RetrievalService
 
 
 def evidence(source_id: str) -> Evidence:
+    source_type = "slack_message"
+    if source_id.startswith("notion:"):
+        source_type = "notion_block"
+    elif source_id.startswith("drive:"):
+        source_type = "drive_file"
     return Evidence(
         sourceId=source_id,
-        sourceType="slack_message",
+        sourceType=source_type,
         title=None,
         titleOrigin="unavailable",
         content="행사비는 법인 계좌로 정산합니다.",
