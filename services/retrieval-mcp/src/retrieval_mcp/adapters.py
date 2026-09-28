@@ -148,6 +148,20 @@ class NotionAdapter:
         self.version = os.getenv("NOTION_VERSION", "2026-03-11")
         self.max_pages = int(os.getenv("NOTION_INDEX_MAX_PAGES", "200"))
         self.ttl_seconds = int(os.getenv("NOTION_INDEX_TTL_SECONDS", "900"))
+        # Pages indexed at once. Notion allows about three requests per second on average; bursts
+        # above that come back as 429 and are retried after Retry-After.
+        self.concurrency = max(1, int(os.getenv("NOTION_INDEX_CONCURRENCY", "4")))
+        # Database names or IDs never indexed, e.g. a member directory with contact details.
+        self.exclude = {name.strip() for name in os.getenv("NOTION_INDEX_EXCLUDE", "").split(",") if name.strip()}
+        # Databases or pages (names or IDs) whose pages and sub-pages are indexed. An allowlist keeps
+        # new, unrelated or personal databases out by default; empty means every shared page.
+        self.roots = {name.strip() for name in os.getenv("NOTION_INDEX_ROOTS", "").split(",") if name.strip()}
+        # A large workspace takes minutes to index under the rate limit. A search waits this long for
+        # the first build and then answers from the pages indexed so far, marked as partial.
+        self.wait_seconds = float(os.getenv("NOTION_INDEX_WAIT_SECONDS", "5"))
+        self._partial: list[Evidence] = []
+        self._building: asyncio.Task[int] | None = None
+        self._pages_done = self._pages_total = 0
         self._index: list[Evidence] = []
         self._indexed_at = 0.0
         self._lock = asyncio.Lock()
@@ -157,9 +171,17 @@ class NotionAdapter:
             raise AdapterFailure(self.source, "missing_credentials", "NOTION_TOKEN is not configured.")
         return {"Authorization": f"Bearer {self.token}", "Notion-Version": self.version}
 
-    async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.request(method, f"https://api.notion.com/v1/{path}", headers=self._headers(), **kwargs)
+    async def _request(self, method: str, path: str, client: Any = None, **kwargs: Any) -> dict[str, Any]:
+        headers = self._headers()
+        for attempt in range(4):
+            if client is None:
+                async with httpx.AsyncClient(timeout=30) as own:
+                    response = await own.request(method, f"https://api.notion.com/v1/{path}", headers=headers, **kwargs)
+            else:
+                response = await client.request(method, f"https://api.notion.com/v1/{path}", headers=headers, **kwargs)
+            if response.status_code != 429 or attempt == 3:
+                break
+            await asyncio.sleep(float(response.headers.get("Retry-After", "1")))
         if response.status_code >= 400:
             code = "notion_api_error"
             try:
@@ -191,37 +213,83 @@ class NotionAdapter:
             return text
         return clean_text(payload.get("caption", [{}])[0].get("plain_text") if payload.get("caption") else "")
 
-    async def _children(self, block_id: str, depth: int = 0) -> list[dict[str, Any]]:
+    async def _children(self, block_id: str, depth: int = 0, client: Any = None) -> list[dict[str, Any]]:
         cursor: str | None = None
         collected: list[dict[str, Any]] = []
         while True:
             params: dict[str, Any] = {"page_size": 100}
             if cursor:
                 params["start_cursor"] = cursor
-            payload = await self._request("GET", f"blocks/{block_id}/children", params=params)
+            payload = await self._request("GET", f"blocks/{block_id}/children", client, params=params)
             results = payload.get("results", [])
             collected.extend(results)
             if depth < 2:
                 for block in results:
                     if block.get("has_children"):
-                        collected.extend(await self._children(block["id"], depth + 1))
+                        collected.extend(await self._children(block["id"], depth + 1, client))
             if not payload.get("has_more"):
                 return collected
             cursor = payload.get("next_cursor")
 
-    async def _pages(self) -> list[dict[str, Any]]:
-        cursor: str | None = None
-        pages: list[dict[str, Any]] = []
-        while len(pages) < self.max_pages:
-            body: dict[str, Any] = {"page_size": min(100, self.max_pages - len(pages))}
+    async def _data_sources(self, client: Any = None) -> dict[str, str]:
+        names, cursor = {}, None
+        while True:
+            body: dict[str, Any] = {"page_size": 100, "filter": {"value": "data_source", "property": "object"}}
             if cursor:
                 body["start_cursor"] = cursor
-            payload = await self._request("POST", "search", json=body)
+            payload = await self._request("POST", "search", client, json=body)
+            for source in payload.get("results", []):
+                names[source["id"]] = "".join(part.get("plain_text", "") for part in source.get("title", []))
+            if not payload.get("has_more"):
+                return names
+            cursor = payload.get("next_cursor")
+
+    async def _pages(self, client: Any = None) -> list[dict[str, Any]]:
+        # Listing is cheap (100 pages per request); scope and the page cap are applied afterwards.
+        cursor: str | None = None
+        pages: list[dict[str, Any]] = []
+        while len(pages) < 10_000:
+            body: dict[str, Any] = {"page_size": 100}
+            if cursor:
+                body["start_cursor"] = cursor
+            payload = await self._request("POST", "search", client, json=body)
             pages.extend(item for item in payload.get("results", []) if item.get("object") == "page")
             if not payload.get("has_more"):
                 break
             cursor = payload.get("next_cursor")
         return pages
+
+    @staticmethod
+    def _page_title(page: dict[str, Any]) -> str:
+        for value in page.get("properties", {}).values():
+            if value.get("type") == "title":
+                return "".join(part.get("plain_text", "") for part in value.get("title", []))
+        return ""
+
+    def _scoped(self, pages: list[dict[str, Any]], sources: dict[str, str]) -> list[dict[str, Any]]:
+        """Pages under an allowed root and under no excluded one, matched by name or ID at any ancestor."""
+        by_id = {page["id"]: page for page in pages}
+
+        def ancestry(page: dict[str, Any]) -> list[str]:
+            names, node = [], page
+            for _ in range(20):
+                names += [node["id"], self._page_title(node)]
+                parent = node.get("parent", {})
+                source = parent.get("data_source_id") or parent.get("database_id")
+                if source:
+                    return names + [source, sources.get(source, "")]
+                node = by_id.get(parent.get("page_id"))
+                if node is None:
+                    break
+            return names
+
+        scoped = []
+        for page in pages:
+            chain = set(ancestry(page))
+            if chain & self.exclude or (self.roots and not chain & self.roots):
+                continue
+            scoped.append(page)
+        return scoped
 
     def _evidence(self, page: dict[str, Any], block: dict[str, Any]) -> Evidence | None:
         content = clean_text(self._block_text(block))
@@ -247,20 +315,56 @@ class NotionAdapter:
 
     async def refresh(self) -> int:
         async with self._lock:
-            pages = await self._pages()
-            records: list[Evidence] = []
-            for page in pages:
-                for block in await self._children(page["id"]):
-                    evidence = self._evidence(page, block)
-                    if evidence:
-                        records.append(evidence)
+            # One pooled client and several pages in flight; a sequential rebuild of about 1,000 pages
+            # took over 14 minutes at 2.3 requests per second.
+            slots = asyncio.Semaphore(self.concurrency)
+            partial: list[Evidence] = []
+            self._partial = partial  # searchable while the first build runs
+            async with httpx.AsyncClient(timeout=30, limits=httpx.Limits(max_connections=self.concurrency)) as client:
+                listed = await self._pages(client)
+                sources = await self._data_sources(client) if self.roots or self.exclude else {}
+                pages = self._scoped(listed, sources)[: self.max_pages]
+                self._pages_done, self._pages_total = 0, len(pages)
+
+                async def page_records(page: dict[str, Any]) -> list[Evidence]:
+                    async with slots:
+                        blocks = await self._children(page["id"], client=client)
+                    records = [evidence for block in blocks if (evidence := self._evidence(page, block))]
+                    partial.extend(records)
+                    self._pages_done += 1
+                    return records
+
+                batches = await asyncio.gather(*(page_records(page) for page in pages))
+            records = [record for batch in batches for record in batch]
             self._index = records
             self._indexed_at = time.monotonic()
             return len(records)
 
-    async def _ensure_index(self) -> None:
-        if not self._index or time.monotonic() - self._indexed_at > self.ttl_seconds:
-            await self.refresh()
+    def start_background_refresh(self) -> asyncio.Task[int]:
+        if self._building is None or self._building.done():
+            self._building = asyncio.create_task(self.refresh())
+            # Retrieve the outcome so a failed rebuild is not reported as an unhandled task error;
+            # searches surface a failure while no complete index exists.
+            self._building.add_done_callback(lambda task: task.cancelled() or task.exception())
+        return self._building
+
+    async def _searchable(self) -> tuple[list[Evidence], list[RetrievalError]]:
+        if self._index and time.monotonic() - self._indexed_at <= self.ttl_seconds:
+            return self._index, []
+        building = self.start_background_refresh()
+        if self._index:
+            return self._index, []  # stale: keep answering while the rebuild runs
+        try:
+            await asyncio.wait_for(asyncio.shield(building), self.wait_seconds)
+        except asyncio.TimeoutError:
+            pass
+        if building.done() and not building.cancelled() and building.exception():
+            raise building.exception()
+        if self._index:
+            return self._index, []
+        progress = f"{self._pages_done} of {self._pages_total or '?'} pages"
+        return list(self._partial), [RetrievalError(source=self.source, code="index_building",
+                                                    message=f"The Notion index is still being built ({progress}); results are partial.")]
 
     @staticmethod
     def _score(record: Evidence, terms: list[str]) -> int:
@@ -305,9 +409,10 @@ class NotionAdapter:
     async def search(self, request: SearchRequest, hints: SearchHints, _: str | None) -> SourceResult:
         if request.refresh_index:
             await self.refresh()
+            index, errors = self._index, []
         else:
-            await self._ensure_index()
-        records = [record for record in self._index if self._score(record, hints.terms)]
+            index, errors = await self._searchable()
+        records = [record for record in index if self._score(record, hints.terms)]
         if hints.notion_roots:
             roots = set(hints.notion_roots)
             records = [record for record in records if record.source_id.split(":", 2)[1] in roots]
@@ -316,7 +421,8 @@ class NotionAdapter:
         if request.time_range and request.time_range.end:
             records = [record for record in records if not record.updated_at or record.updated_at <= request.time_range.end]
         selected = sorted(records, key=lambda record: self._score(record, hints.terms), reverse=True)[: request.limit * 2]
-        return await self._refresh_selected_pages(selected)
+        result = await self._refresh_selected_pages(selected)
+        return SourceResult(records=result.records, errors=[*errors, *result.errors])
 
     async def fetch_context(self, source_id: str) -> SourceResult:
         match = re.fullmatch(r"notion:([^:]+)(?::[^:]+)?", source_id)

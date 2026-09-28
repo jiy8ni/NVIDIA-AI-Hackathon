@@ -43,8 +43,19 @@ adding this MCP server to another NeMoTron agent.
   `assistant.search.context` API, not the legacy `search.messages` endpoint.
 - Notion: create an Integration and explicitly share target pages and data
   sources with it. The in-memory index only covers pages visible to that
-  Integration and is rebuilt after its TTL or by calling `search_evidence` with
-  `refreshIndex: true`.
+  Integration (up to `NOTION_INDEX_MAX_PAGES`). It is built in the background
+  from server start, `NOTION_INDEX_CONCURRENCY` pages at a time; Notion's rate
+  limit (~3 requests/s) still makes a 1,000-page workspace take 10+ minutes.
+  Until the first build finishes, a search waits `NOTION_INDEX_WAIT_SECONDS`
+  and then answers from the pages indexed so far with an `index_building`
+  error, so results are marked partial. After `NOTION_INDEX_TTL_SECONDS` the
+  old index keeps answering while a new one is built.
+  `NOTION_INDEX_ROOTS` is an allowlist of databases or pages (names or IDs):
+  only pages under them, including sub-pages, are indexed. Prefer it over
+  indexing a whole workspace; new or unrelated databases then stay out by
+  default. `NOTION_INDEX_EXCLUDE` removes databases or pages (and their
+  sub-pages) even inside an allowed root, e.g. a member directory with contact
+  details. `search_evidence` with `refreshIndex: true` rebuilds and waits.
 - Google Drive: provide `GOOGLE_ACCESS_TOKEN`, or client ID, client secret, and
   refresh token for a read-only OAuth grant.
 

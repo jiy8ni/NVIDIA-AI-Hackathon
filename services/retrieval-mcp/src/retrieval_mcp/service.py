@@ -25,6 +25,13 @@ class RetrievalService:
             SourceName.DRIVE: DriveAdapter(),
         }
 
+    def warm_up(self) -> None:
+        """Start slow source indexes in the background so the first search does not wait for them."""
+        for adapter in self.adapters.values():
+            start = getattr(adapter, "start_background_refresh", None)
+            if start and getattr(adapter, "token", None):
+                start()
+
     @staticmethod
     def _decode_cursor(cursor: str | None) -> dict[str, str]:
         if not cursor:

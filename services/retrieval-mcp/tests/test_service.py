@@ -134,5 +134,23 @@ class RetrievalServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.errors[0].source, "unknown")
 
 
+class WarmUpTest(unittest.TestCase):
+    def test_warm_up_starts_background_indexing_only_for_configured_indexes(self) -> None:
+        started = []
+
+        class IndexedAdapter(WorkingAdapter):
+            def __init__(self, token: str | None) -> None:
+                self.token = token
+
+            def start_background_refresh(self) -> None:
+                started.append(self.token)
+
+        service = RetrievalService(adapters={SourceName.NOTION: IndexedAdapter("configured"),
+                                             SourceName.DRIVE: IndexedAdapter(None),
+                                             SourceName.SLACK: WorkingAdapter()}, registry=Registry())
+        service.warm_up()
+        self.assertEqual(started, ["configured"])
+
+
 if __name__ == "__main__":
     unittest.main()
