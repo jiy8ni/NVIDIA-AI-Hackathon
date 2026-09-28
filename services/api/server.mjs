@@ -7,6 +7,7 @@ import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
 import YAML from 'yaml';
 import { recheckAccess } from './access.mjs';
+import { workerTimeoutMs } from './timeouts.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const port = Number(process.env.PORT || 8787);
@@ -85,7 +86,7 @@ function workspaceIds(ws) { return new Set([ws.id, ...ws.sections.flatMap(s => [
 async function runAgent(input) {
   let response;
   try {
-    response = await fetch(worker + '/internal/run', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + internalToken }, body: JSON.stringify(input), signal: AbortSignal.timeout(input.mode === 'ask' ? 45000 : 180000) });
+    response = await fetch(worker + '/internal/run', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + internalToken }, body: JSON.stringify(input), signal: AbortSignal.timeout(workerTimeoutMs(input.mode)) });
   } catch (error) { fail(error.name === 'TimeoutError' ? 504 : 502, error.name === 'TimeoutError' ? 'ASK_TIMEOUT' : 'UPSTREAM_ERROR', 'Orchestrator 응답을 받지 못했습니다.'); }
   const data = await response.json();
   if (!response.ok) fail(response.status, data.code || 'UPSTREAM_ERROR', data.message || 'Orchestrator 처리에 실패했습니다.');

@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import re
@@ -22,6 +23,21 @@ Task dependencies and blockers require explicit 선행 업무: and 차단 요소
 Return ONLY JSON matching the supplied schema. No markdown fences.'''
 
 
+TRANSIENT_STATUS = {429, 500, 502, 503, 504}
+# Waits before retrying a busy endpoint (503/429); an immediate retry hit the same 503 on 2026-09-28.
+RETRY_BACKOFF_SECONDS = (1.5, 4.0)
+
+
+class ModelBusy(AgentError):
+    """The endpoint kept answering 429/5xx after the backoff retries."""
+
+    def __init__(self):
+        super().__init__('MODEL_UNAVAILABLE', 'Nemotron 요청에 실패했습니다. 설정과 서비스 상태를 확인하세요.')
+SYNTHESIS_MAX_TOKENS = 8000
+# Question, history, warnings and JSON keys around the records in a synthesis request.
+STATE_ALLOWANCE = 2500
+
+
 class NemotronModel:
     mode = 'nemotron'
 
@@ -30,6 +46,11 @@ class NemotronModel:
         self.model = os.getenv('NVIDIA_MODEL')
         self.base = os.getenv('NVIDIA_BASE_URL', 'https://integrate.api.nvidia.com/v1').rstrip('/')
         self.timeout = float(os.getenv('NVIDIA_TIMEOUT_SECONDS', '60'))
+        # Full synthesis emits far more JSON than a routing decision; 60s was not enough on 2026-09-28.
+        self.synthesis_timeout = float(os.getenv('NVIDIA_SYNTHESIS_TIMEOUT_SECONDS', '150'))
+        # Optional second hosted model for when the primary endpoint keeps answering 429/5xx.
+        self.fallback_model = os.getenv('NVIDIA_FALLBACK_MODEL') or None
+        self._events = []
         if not self.key or not self.model:
             raise AgentError('MODEL_NOT_CONFIGURED', 'Nemotron 모델명과 NVIDIA_API_KEY를 설정하세요.', 503)
         from urllib.parse import urlparse
@@ -49,20 +70,43 @@ class NemotronModel:
     def count_tokens(self, text):
         return len(self.tokenizer.encode(text).ids)
 
-    async def complete(self, instruction, data, schema, max_tokens):
+    def input_budget(self):
+        """Tokens left for evidence after the synthesis request's system prompt, schema, output and state."""
+        fixed = self.count_tokens(SYSTEM + json.dumps(Synthesis.model_json_schema(), ensure_ascii=False))
+        return self.context_limit - SYNTHESIS_MAX_TOKENS - 1024 - fixed - STATE_ALLOWANCE
+
+    async def complete(self, instruction, data, schema, max_tokens, timeout=None):
+        try:
+            return await self._complete(self.model, instruction, data, schema, max_tokens, timeout)
+        except ModelBusy:
+            fallback = getattr(self, 'fallback_model', None)
+            if not fallback:
+                raise
+        # Another hosted Nemotron model of the same tokenizer family, recorded in the trace; never an offline answer.
+        self.__dict__.setdefault('_events', []).append({'event': 'model_fallback', 'reason': 'busy'})
+        return await self._complete(fallback, instruction, data, schema, max_tokens, timeout)
+
+    def drain_events(self):
+        events, self._events = self.__dict__.get('_events', []), []
+        return events
+
+    async def _complete(self, model_id, instruction, data, schema, max_tokens, timeout=None):
         content = json.dumps({'instruction': instruction, 'data': data,
                               'schema': schema.model_json_schema()}, ensure_ascii=False)
         if self.count_tokens(SYSTEM + content) + max_tokens + 1024 > self.context_limit:
             raise AgentError('CONTEXT_LIMIT', '모델 문맥 예산을 초과했습니다. 검색 범위를 줄여주세요.')
-        async with httpx.AsyncClient(timeout=getattr(self, 'timeout', 30), follow_redirects=False) as client:
-            for attempt in range(2):
+        async with httpx.AsyncClient(timeout=timeout or getattr(self, 'timeout', 30), follow_redirects=False) as client:
+            # One schema-repair turn and, separately, one retry of a transient transport failure: hosted
+            # endpoints were seen taking 2s and 55s for the same kind of call on 2026-09-28.
+            schema_retry, transport_retries = False, 0
+            while True:
                 messages = [{'role': 'system', 'content': SYSTEM}, {'role': 'user', 'content': content}]
-                if attempt:
+                if schema_retry:
                     messages.append({'role': 'user', 'content': 'Previous JSON failed schema validation. Return only a valid JSON object with the required fields.'})
                 try:
                     response = await client.post(self.base + '/chat/completions',
                         headers={'Authorization': 'Bearer ' + self.key},
-                        json={'model': self.model, 'messages': messages, 'temperature': 0,
+                        json={'model': model_id, 'messages': messages, 'temperature': 0,
                               'max_tokens': max_tokens, 'stream': False,
                               # Nemotron 3.5 emits a long reasoning trace by default.
                               # Structured orchestration output must reserve the budget for
@@ -73,6 +117,12 @@ class NemotronModel:
                               # response to the same Pydantic contract that
                               # is validated again below.
                               'guided_json': schema.model_json_schema()})
+                    if response.status_code in TRANSIENT_STATUS:
+                        if transport_retries >= len(RETRY_BACKOFF_SECONDS):
+                            raise ModelBusy()
+                        await asyncio.sleep(RETRY_BACKOFF_SECONDS[transport_retries])
+                        transport_retries += 1
+                        continue
                     response.raise_for_status()
                     result = response.json()['choices'][0]
                     if result.get('finish_reason') == 'length':
@@ -81,17 +131,36 @@ class NemotronModel:
                     if value.startswith('```'):
                         value = re.sub(r'^```(?:json)?\s*|\s*```$', '', value)
                     return schema.model_validate_json(value)
+                except httpx.TimeoutException as exc:
+                    if not transport_retries:
+                        transport_retries = len(RETRY_BACKOFF_SECONDS)  # a timeout already waited; retry once
+                        continue
+                    raise AgentError('MODEL_UNAVAILABLE', 'Nemotron 요청에 실패했습니다. 설정과 서비스 상태를 확인하세요.') from exc
                 except httpx.HTTPError as exc:
                     raise AgentError('MODEL_UNAVAILABLE', 'Nemotron 요청에 실패했습니다. 설정과 서비스 상태를 확인하세요.') from exc
                 except (ValueError, KeyError, IndexError, TypeError):
-                    if attempt:
+                    if schema_retry:
                         raise AgentError('MODEL_OUTPUT_INVALID', '모델 출력이 계약을 만족하지 않습니다.')
+                    schema_retry = True
 
     async def decide(self, state):
-        return await self.complete('Choose one useful read-only next action. Finish when sufficient, unavailable, or no novel query. read_more with recordKey inspects the next locally stored text window if hasMore=true; it is not a network fetch. Never repeat an action. Sources must stay within allowedSources.', state, Decision, 800)
+        return await self.complete(
+            'Choose one useful read-only next action. history lists earlier queries and newRecords, the number of unseen records each found; '
+            'never repeat a previous query or merely add words to it. '
+            'Search matches literal keywords, so query with 1-3 short keywords likely to appear verbatim in documents, not a sentence. '
+            'Before finishing, check the records: if they name another document, rule, channel, thread, decision or person that has not been searched, '
+            'search for that name; if an allowed source has not been searched yet, search it; if the request is still unanswered or the records conflict, '
+            'search again with different keywords. If a search found no new records, change the keywords instead of extending them. '
+            'unsearchedLeads lists names quoted in the records that no query has covered yet; unless the request is fully answered, '
+            'search the most relevant lead before finishing. '
+            'For generate, cover company, team and role, current tasks and schedule, setup, and open decisions. '
+            'Finish when the evidence is sufficient, searchesRemaining is 0, or no novel query remains. '
+            'read_more with recordKey inspects the next locally stored text window if hasMore=true; it is not a network fetch. '
+            'Sources must stay within allowedSources.', state, Decision, 800)
 
     async def synthesize(self, state):
-        return await self.complete('Extract relevant facts, explicit task fields, unresolved conflicts, knowledge gaps and separately labelled suggestions. An empty list is valid. Prefer fewer precise quotes. Every quote must be an exact substring of its recordKey record content; if you cannot copy an exact quote, omit the item. Every non-null field value must be a substring of one of its exact evidence quotes; use null with an empty evidence list when unconfirmed. Use only recordKey values supplied in records. Return compact JSON only; never include explanations, markdown or reasoning in the content. Question and page context determine relevance.', state, Synthesis, 8000)
+        return await self.complete('Extract relevant facts, explicit task fields, unresolved conflicts, knowledge gaps and separately labelled suggestions. An empty list is valid. Prefer fewer precise quotes. Every quote must be an exact substring of its recordKey record content; if you cannot copy an exact quote, omit the item. Every non-null field value must be a substring of one of its exact evidence quotes; use null with an empty evidence list when unconfirmed. Use only recordKey values supplied in records. Return compact JSON only; never include explanations, markdown or reasoning in the content. Question and page context determine relevance.', state, Synthesis, SYNTHESIS_MAX_TOKENS,
+            getattr(self, 'synthesis_timeout', None))
 
 
 class OfflineModel:
@@ -102,6 +171,9 @@ class OfflineModel:
     def count_tokens(self, text):
         # Conservative byte budget, not a model-specific tokenizer.
         return len(text.encode('utf-8'))
+
+    def input_budget(self):
+        return self.context_limit - 10000
 
     async def decide(self, state):
         sources = state['allowedSources']

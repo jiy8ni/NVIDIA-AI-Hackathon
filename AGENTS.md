@@ -7,5 +7,5 @@
 - Preserve opposing evidence. Unknowns remain null or confirmation questions.
 - No external SaaS writes. HTTP-backed cached content requires current ACL validation; missing ACL fails closed.
 - Native/NAT runtime and offline/Nemotron model mode are independent. Do not present fixtures as NVIDIA inference.
-- Test with pytest, node --test services/api/access.test.mjs, and the web build. Optional NAT tests need the supported Python environment.
+- Test with pytest, node --test services/api/access.test.mjs services/api/timeouts.test.mjs, and the web build. Optional NAT tests need the supported Python environment.
 - Keep .env, .runtime, generated PDFs/screenshots, virtualenvs and node_modules out of Git.

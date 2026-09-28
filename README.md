@@ -55,7 +55,7 @@ node scripts/dev.mjs
 
 ```powershell
 .venv/Scripts/python.exe -m pytest -q
-node --test services/api/access.test.mjs
+node --test services/api/access.test.mjs services/api/timeouts.test.mjs
 npm.cmd run build --prefix apps/web -- --emptyOutDir=false
 $env:PYTHONPATH='services/orchestrator'
 .venv/Scripts/python.exe -m handoff.export_pdf --user-id kim-juhyung

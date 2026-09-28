@@ -23,5 +23,5 @@ jobs:
       - run: python -m pip install -e services/retrieval-mcp
       - run: python -m pytest -q
       - run: python -m unittest discover -s services/retrieval-mcp/tests -v
-      - run: node --test services/api/access.test.mjs
+      - run: node --test services/api/access.test.mjs services/api/timeouts.test.mjs
       - run: npm run build --prefix apps/web

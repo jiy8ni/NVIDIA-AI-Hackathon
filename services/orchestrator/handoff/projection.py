@@ -1,6 +1,7 @@
 import hashlib
 import re
-from .contracts import AgentError
+from types import SimpleNamespace
+from .contracts import AgentError, Gap, GroundedField
 from .providers import provider_of, safe_url
 from .entities import entity_refs, labelled, validate_entities, project_entities
 
@@ -22,37 +23,189 @@ def link(e, quote=None):
             'access': 'available', 'quotedContext': quote}
 
 
+OWNER_LABELS, DUE_LABELS = '담당자|담당|assignee', '기한|마감|deadline|due'
+# Live models re-type quotation marks inside JSON strings ("a" -> 'a' or a). Only these characters and
+# whitespace may differ between a model quote and the source; words never do.
+QUOTE_MARKS = set('"\'`´“”„‘’‚«»「」『』')
+
+
+def _squashed(text):
+    """Text without quote marks and with collapsed whitespace, plus each kept character's source index."""
+    chars, index = [], []
+    for i, ch in enumerate(text):
+        if ch in QUOTE_MARKS:
+            continue
+        if ch.isspace():
+            if not chars or chars[-1] == ' ':
+                continue
+            ch = ' '
+        chars.append(ch)
+        index.append(i)
+    return ''.join(chars), index
+
+
+def locate(fragment, text):
+    """Exact span of ``text`` that ``fragment`` quotes, tolerating only quote-mark and whitespace changes."""
+    if fragment in text:
+        return fragment
+    needle = _squashed(fragment)[0].strip()
+    haystack, index = _squashed(text)
+    start = haystack.find(needle) if len(needle) >= 2 else -1
+    if start < 0:
+        return None
+    return text[index[start]:index[start + len(needle) - 1] + 1]
+
+
+def _ref_ok(r, registry):
+    record = registry.get(r.recordKey)
+    return bool(record and r.quote in record.content and link(record))
+
+
+def _field_ok(f, registry):
+    if not all(_ref_ok(r, registry) for r in f.evidence):
+        return False
+    if f.value is None:
+        return not f.evidence
+    return bool(f.value.strip() and f.evidence and any(f.value in r.quote for r in f.evidence))
+
+
+def _explicit(f, labels):
+    return not f.value or any(re.search(r'(?:' + labels + r')\s*[:：]\s*' + re.escape(f.value), r.quote, re.I) for r in f.evidence)
+
+
+PLACEHOLDERS = {'미정', '미확정', '정해지지 않음', '없음', '모름', 'unknown', 'tbd', 'n/a', '-'}
+
+
+def _placeholder(f):
+    return f.value is not None and f.value.strip().lower() in PLACEHOLDERS
+
+
+def _related(task, f, label):
+    return labelled(f, label) and any(task.title.value and task.title.value in r.quote for r in f.evidence)
+
+
+def _task_fields(task):
+    return [task.title, task.objective, task.ownerName, task.dueText, task.nextAction,
+            *task.steps, *task.definitionOfDone, *task.dependencies, *task.blockers]
+
+
 def validate_synthesis(result, registry, role=''):
+    def fail(message):
+        raise AgentError('MODEL_OUTPUT_INVALID', message)
     def ref(r):
-        record = registry.get(r.recordKey)
-        if not record or r.quote not in record.content or not link(record):
-            raise AgentError('MODEL_OUTPUT_INVALID', '검증할 수 없는 인용이 포함되어 있습니다.')
+        if not _ref_ok(r, registry):
+            fail('검증할 수 없는 인용이 포함되어 있습니다.')
     for f in result.facts:
         ref(f)
     def validate_field(f):
         for r in f.evidence:
             ref(r)
-        if f.value is not None and (not f.value.strip() or not f.evidence or not any(f.value in r.quote for r in f.evidence)):
-            raise AgentError('MODEL_OUTPUT_INVALID', '원문에 없는 필드가 포함되어 있습니다.')
-        if f.value is None and f.evidence:
-            raise AgentError('MODEL_OUTPUT_INVALID', '미확정 필드에 확정 근거를 연결할 수 없습니다.')
+        if not _field_ok(f, registry):
+            fail('미확정 필드에 확정 근거를 연결할 수 없습니다.' if f.value is None else '원문에 없는 필드가 포함되어 있습니다.')
     validate_entities(result, validate_field, role)
     for task in result.tasks:
-        for f in [task.title, task.objective, task.ownerName, task.dueText, task.nextAction, *task.steps, *task.definitionOfDone, *task.dependencies, *task.blockers]:
+        for f in _task_fields(task):
             validate_field(f)
         for label, fields in [('선행 업무', task.dependencies), ('차단 요소', task.blockers)]:
             for f in fields:
-                if not labelled(f, label) or not any(task.title.value and task.title.value in r.quote for r in f.evidence):
-                    raise AgentError('MODEL_OUTPUT_INVALID', '업무 관계의 명시적인 연결 근거가 필요합니다.')
-        if task.ownerName.value and not any(re.search(r'(?:담당자|담당|assignee)\s*[:：]\s*' + re.escape(task.ownerName.value), r.quote, re.I) for r in task.ownerName.evidence):
-            raise AgentError('MODEL_OUTPUT_INVALID', '명시적인 업무 담당자 배정 근거가 필요합니다.')
-        if task.dueText.value and not any(re.search(r'(?:기한|마감|deadline|due)\s*[:：]\s*' + re.escape(task.dueText.value), r.quote, re.I) for r in task.dueText.evidence):
-            raise AgentError('MODEL_OUTPUT_INVALID', '명시적인 업무 기한 근거가 필요합니다.')
+                if not _related(task, f, label):
+                    fail('업무 관계의 명시적인 연결 근거가 필요합니다.')
+        if not _explicit(task.ownerName, OWNER_LABELS):
+            fail('명시적인 업무 담당자 배정 근거가 필요합니다.')
+        if not _explicit(task.dueText, DUE_LABELS):
+            fail('명시적인 업무 기한 근거가 필요합니다.')
     for c in result.conflicts:
         for r in c.alternatives:
             ref(r)
         if len({(r.recordKey, r.quote) for r in c.alternatives}) < 2:
-            raise AgentError('MODEL_OUTPUT_INVALID', '충돌에는 서로 다른 두 근거가 필요합니다.')
+            fail('충돌에는 서로 다른 두 근거가 필요합니다.')
+
+
+def repair_synthesis(result, registry, role=''):
+    """Restore quotes that differ from the source only by quote marks or spacing, then remove what still
+    cannot be verified: unverifiable facts are dropped, task fields fall back to unknown, and a conflict
+    left with fewer than two verified sides becomes a confirmation question.
+
+    Returns the cleaned copy and how many items or fields were removed. validate_synthesis stays the final gate.
+    """
+    result = result.model_copy(deep=True)
+    dropped = 0
+
+    def restore(r):
+        record = registry.get(r.recordKey)
+        if record and (span := locate(r.quote, record.content)):
+            r.quote = span
+            return
+        # Chunks of one file share a title, and live models cite the right sentence under a neighbouring
+        # chunk's recordKey. The quote is kept only if it is verbatim in another visible record.
+        for key, other in registry.items():
+            if span := locate(r.quote, other.content):
+                r.recordKey, r.quote = key, span
+                return
+
+    def restore_field(f):
+        for r in f.evidence:
+            restore(r)
+        if f.value is not None and not any(f.value in r.quote for r in f.evidence):
+            f.value = next((span for r in f.evidence if (span := locate(f.value, r.quote))), f.value)
+
+    for f in result.facts:
+        restore(f)
+    for c in result.conflicts:
+        for r in c.alternatives:
+            restore(r)
+    for f in [f for t in result.tasks for f in _task_fields(t)] + [f for e in [*result.people, *result.milestones] for f in e.__dict__.values()]:
+        restore_field(f)
+
+    facts = [f for f in result.facts if _ref_ok(f, registry)]
+    dropped += len(result.facts) - len(facts)
+
+    tasks = []
+    for task in result.tasks:
+        if not _field_ok(task.title, registry):
+            dropped += 1
+            continue
+        for name, labels in [('objective', None), ('ownerName', OWNER_LABELS), ('dueText', DUE_LABELS), ('nextAction', None)]:
+            f = getattr(task, name)
+            if _placeholder(f):
+                # "담당자: 미정" states that the value is unknown; it is not an owner called "미정".
+                setattr(task, name, GroundedField(value=None, evidence=[]))
+            elif not _field_ok(f, registry) or (labels and not _explicit(f, labels)):
+                setattr(task, name, GroundedField(value=None, evidence=[]))
+                dropped += 1
+        for name, label in [('steps', None), ('definitionOfDone', None), ('dependencies', '선행 업무'), ('blockers', '차단 요소')]:
+            fields = getattr(task, name)
+            kept = [f for f in fields if not _placeholder(f) and _field_ok(f, registry) and (not label or _related(task, f, label))]
+            dropped += len(fields) - len(kept)
+            setattr(task, name, kept)
+        tasks.append(task)
+
+    conflicts, gaps = [], list(result.gaps)
+    for c in result.conflicts:
+        verified = [r for r in c.alternatives if _ref_ok(r, registry)]
+        dropped += len(c.alternatives) - len(verified)
+        if len({(r.recordKey, r.quote) for r in verified}) >= 2:
+            c.alternatives = verified
+            conflicts.append(c)
+        elif len(gaps) < 12:
+            gaps.append(Gap(question=c.question, whyItMatters='서로 다른 근거가 제시됐지만 원문 인용으로 확인하지 못했습니다.'))
+
+    def strict_field(f):
+        if not _field_ok(f, registry):
+            raise AgentError('MODEL_OUTPUT_INVALID', '검증할 수 없는 인용이 포함되어 있습니다.')
+    def entity_ok(people=(), milestones=()):
+        try:
+            validate_entities(SimpleNamespace(people=list(people), milestones=list(milestones)), strict_field, role)
+            return True
+        except AgentError:
+            return False
+    people = [p for p in result.people if entity_ok(people=[p])]
+    milestones = [m for m in result.milestones if entity_ok(milestones=[m])]
+    dropped += len(result.people) - len(people) + len(result.milestones) - len(milestones)
+
+    result.facts, result.tasks, result.conflicts, result.gaps = facts, tasks, conflicts, gaps
+    result.people, result.milestones = people, milestones
+    return result, dropped
 
 
 def project(result, registry, mode, context, warnings, model_mode, generated_at):

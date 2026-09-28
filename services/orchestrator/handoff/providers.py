@@ -11,6 +11,7 @@ import httpx
 from .contracts import AgentError, Evidence, RetrievalResponse
 
 ROOT = Path(__file__).resolve().parents[3]
+CONTEXT_WINDOW = 12
 
 
 def provider_of(e: Evidence):
@@ -35,6 +36,9 @@ def safe_url(value):
 
 
 class FixtureProvider:
+    # Only the fixture treats '*' as "the whole virtual org"; the engine rewrites it for other providers.
+    supports_wildcard = True
+
     def __init__(self, path=None):
         self.path = Path(path or ROOT / 'fixtures/evidence.json')
 
@@ -198,6 +202,14 @@ class McpProvider:
         return result
 
     @staticmethod
+    def _window(records, candidate):
+        """Records around the hit. A Notion page can hold hundreds of blocks (85 and 234 were seen on
+        2026-09-28), which would crowd out every other search result."""
+        position = next((i for i, record in enumerate(records) if record.sourceId == candidate.sourceId), 0)
+        start = max(0, min(position - CONTEXT_WINDOW // 2, len(records) - CONTEXT_WINDOW))
+        return records[start:start + CONTEXT_WINDOW]
+
+    @staticmethod
     def _recount(records, sources):
         return [{'source': source, 'status': 'searched',
                  'recordCount': sum(provider_of(record) == source for record in records)} for source in sources]
@@ -244,8 +256,11 @@ class McpProvider:
             ]
             return self._response_with(result, status='partial', errors=errors,
                                        coverage=self._recount(result.records, selected))
+        window = self._window(context.records, candidate)
+        if len(window) < len(context.records):
+            self._events.append({'event': 'mcp_context_window', 'kept': len(window), 'of': len(context.records)})
         expanded = [record for record in result.records if record.sourceId != candidate.sourceId]
-        expanded.extend(context.records)
+        expanded.extend(window)
         errors = result.errors + context.errors
         return self._response_with(result, status='partial' if errors else result.status,
                                    records=expanded, coverage=self._recount(expanded, selected), errors=errors)
