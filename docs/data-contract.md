@@ -34,7 +34,7 @@ HTTP provider는 설정된 `HANDOFF_RETRIEVAL_URL`에 다음 JSON을 POST합니�
 - 응답 requestId는 요청 값 그대로 돌려줍니다.
 - sources는 실제 이번 검색 대상, scope.sources는 서버가 허용한 최대 범위입니다.
 - 다음 페이지는 같은 query/sources/scope와 받은 cursor를 전달합니다. cursor는 불투명 값으로 취급합니다.
-- fixture의 query `*`는 가상 조직 전체 조회입니다. 실제 provider에서 지원할지 합의하거나 provider 내부에서 치환해야 합니다.
+- fixture의 query `*`는 가상 조직 전체 조회입니다. 실제 provider는 이를 문자 그대로 검색하므로(2026-09-28 Notion에서 별표가 든 무관한 페이지를 반환), Orchestrator는 `supports_wildcard`를 선언하지 않은 provider에 `*` 대신 `<역할> 온보딩` 검색어를 보냅니다. provider가 전체 조회를 지원하게 되면 합의 후 이 치환을 바꿉니다.
 - 인증은 HANDOFF_RETRIEVAL_TOKEN Bearer. 실제 provider는 호출자와 원본 ACL을 독립 검증해야 합니다.
 - 요청 필드나 프로토콜이 다르면 HttpProvider만 조정하고 공개 API·합성 코드는 유지합니다.
 - `HANDOFF_RETRIEVAL_MODE=mcp`이면 Python Orchestrator의 `McpProvider`가 실제 Streamable HTTP Retrieval MCP의 `search_evidence`를 호출합니다. MCP 도구의 `requestId`는 내부 프로토콜 값이므로, MCP의 request/response 대응이 완료된 뒤 Orchestrator 요청 ID로 경계에서 정규화합니다. 이 규약의 frozen 필드에는 변함이 없습니다.

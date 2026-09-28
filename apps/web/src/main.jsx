@@ -8,6 +8,8 @@ const API_BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8787';
 const USER_ID = import.meta.env.VITE_USER_ID || 'kim-juhyung';
 const TEAM_ID = import.meta.env.VITE_TEAM_ID || 'atlas';
 const MODE = import.meta.env.VITE_MODEL_MODE || 'offline';
+// A multi-search ask with a hosted model can take minutes; the browser must outlast the API's own limit.
+const ASK_TIMEOUT_MS = Number(import.meta.env.VITE_ASK_TIMEOUT_MS) || 180000;
 
 async function api(path, options = {}) {
   const response = await fetch(API_BASE + path, {
@@ -96,7 +98,7 @@ function App() {
     if (busy || assistant.loading) return;
     setAssistant({ open: true, loading: true, answer: null });
     try {
-      const answer = await api('/v1/onboarding/ask', { method: 'POST', body: JSON.stringify({ question, context: { onboardingId: workspace.id, currentPath: '/onboarding', sectionId: activeSectionId === 'home' ? null : activeSectionId, selectedText, entityIds: [] } }) });
+      const answer = await api('/v1/onboarding/ask', { method: 'POST', body: JSON.stringify({ question, context: { onboardingId: workspace.id, currentPath: '/onboarding', sectionId: activeSectionId === 'home' ? null : activeSectionId, selectedText, entityIds: [] } }), signal: AbortSignal.timeout(ASK_TIMEOUT_MS) });
       setAssistant({ open: true, loading: false, answer });
     } catch (e) { setAssistant({ open: true, loading: false, answer: { answer: e.message, citations: [], suggestedQuestions: [] } }); }
   };

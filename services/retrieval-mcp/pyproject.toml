@@ -16,6 +16,7 @@ nat = ["nvidia-nat[langchain,mcp]>=1.8,<2"]
 
 [project.scripts]
 retrieval-mcp = "retrieval_mcp.server:main"
+retrieval-mcp-mock = "retrieval_mcp.mock_workspace:main"
 
 [build-system]
 requires = ["hatchling>=1.25"]

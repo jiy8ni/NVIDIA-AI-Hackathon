@@ -81,6 +81,23 @@ locations, not source text or inferred organisational facts.
 No raw source text is written to a database. The Notion index exists only in
 server memory and disappears when the process stops.
 
+## Mock workspace for agent-loop tests
+
+`retrieval-mcp-mock` runs the same MCP server, service, registry and source adapters, but answers the
+adapters' Notion/Slack/Drive API calls from `src/retrieval_mcp/mock_data/atlas_workspace.json`, a fictional
+startup (Atlas). No credential is read and unknown hosts fail instead of reaching the network.
+
+```powershell
+cd services/retrieval-mcp
+uv run retrieval-mcp-mock   # same endpoint: http://127.0.0.1:8000/mcp
+```
+
+The data is split so that answers need several searches: the old handoff page says "정산 승인 기준은
+'결재 규정' 문서를 확인하세요", and the approval rule page is reachable only by searching that name. The old
+page (모임통장) conflicts with the 9/22 meeting notes and the #finance thread (법인 계좌 전환 검토, 미확정),
+and one page and one message carry a prompt-injection line. Results carry `*.atlas.test` links, so they
+cannot be mistaken for real sources.
+
 ## Verification
 
 ```powershell

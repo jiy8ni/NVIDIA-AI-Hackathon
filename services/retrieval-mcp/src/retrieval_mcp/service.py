@@ -67,7 +67,7 @@ class RetrievalService:
         remainder: list[Evidence] = []
         seen_provider: set[str] = set()
         for record in ranked:
-            provider = record.source_id.split(":", 1)[0]
+            provider = self._provider(record)
             if provider not in seen_provider:
                 primary.append(record)
                 seen_provider.add(provider)
@@ -85,7 +85,12 @@ class RetrievalService:
         can be larger than the final ``records`` array.  Reporting the final
         count keeps downstream contract validation deterministic.
         """
-        return sum(record.source_id.startswith(f"{source.value}:") for record in records)
+        return sum(RetrievalService._provider(record) == source.value for record in records)
+
+    @staticmethod
+    def _provider(record: Evidence) -> str:
+        # Slack thread messages use the "slack-thread:" prefix but belong to the slack provider.
+        return record.source_id.split(":", 1)[0].removesuffix("-thread")
 
     async def search(self, request: SearchRequest) -> SearchResponse:
         hints = self.registry.hints(request)

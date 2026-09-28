@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { workerTimeoutMs } from '../services/api/timeouts.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 if (fs.existsSync(path.join(root, '.env'))) process.loadEnvFile(path.join(root, '.env'));
@@ -19,5 +20,5 @@ function start(command, args, cwd, extra = {}) { const child = spawn(command, ar
 process.on('SIGINT', () => stop()); process.on('SIGTERM', () => stop());
 start(python, ['-m', 'uvicorn', 'handoff.api:app', '--host', '127.0.0.1', '--port', '8788', '--no-access-log'], root);
 start(process.execPath, ['services/api/server.mjs'], root);
-start(process.execPath, ['node_modules/vite/bin/vite.js', '--host', '127.0.0.1', '--port', '5173', '--strictPort'], path.join(root, 'apps/web'), { VITE_API_URL: 'http://127.0.0.1:8787', VITE_AUTH_TOKEN: token, VITE_USER_ID: uid, VITE_TEAM_ID: env.HANDOFF_TEAM_ID, VITE_ROLE: process.env.HANDOFF_ROLE || '운영 담당자', VITE_MODEL_MODE: env.HANDOFF_MODEL_MODE, VITE_RETRIEVAL_MODE: env.HANDOFF_RETRIEVAL_MODE });
+start(process.execPath, ['node_modules/vite/bin/vite.js', '--host', '127.0.0.1', '--port', '5173', '--strictPort'], path.join(root, 'apps/web'), { VITE_API_URL: 'http://127.0.0.1:8787', VITE_AUTH_TOKEN: token, VITE_USER_ID: uid, VITE_TEAM_ID: env.HANDOFF_TEAM_ID, VITE_ROLE: process.env.HANDOFF_ROLE || '운영 담당자', VITE_MODEL_MODE: env.HANDOFF_MODEL_MODE, VITE_RETRIEVAL_MODE: env.HANDOFF_RETRIEVAL_MODE, VITE_ASK_TIMEOUT_MS: String(workerTimeoutMs('ask', env) + 15000) });
 console.log('HandoffOS local: http://127.0.0.1:5173 — demo JWT expires in 12h. Ctrl+C stops all services.');
