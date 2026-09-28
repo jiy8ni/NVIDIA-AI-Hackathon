@@ -468,11 +468,16 @@ class DriveAdapter:
         payload = response.json()
         records: list[Evidence] = []
         errors: list[RetrievalError] = []
-        for file in payload.get("files", [])[: request.limit]:
-            try:
-                records.extend(await self._file_records(file))
-            except AdapterFailure as error:
-                errors.append(RetrievalError(source=self.source, code=error.code, message=error.message))
+        # Download matched files concurrently: one-by-one exports took ~25s per search on a real Drive.
+        files = payload.get("files", [])[: request.limit]
+        outcomes = await asyncio.gather(*(self._file_records(file) for file in files), return_exceptions=True)
+        for outcome in outcomes:
+            if isinstance(outcome, AdapterFailure):
+                errors.append(RetrievalError(source=self.source, code=outcome.code, message=outcome.message))
+            elif isinstance(outcome, BaseException):
+                raise outcome
+            else:
+                records.extend(outcome)
         if payload.get("incompleteSearch"):
             errors.append(RetrievalError(source=self.source, code="incomplete_search", message="Drive could not search every shared-drive corpus."))
         return SourceResult(records=records, errors=errors, next_cursor=payload.get("nextPageToken") or None)
