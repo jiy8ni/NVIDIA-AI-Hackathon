@@ -184,3 +184,18 @@ def test_quote_cited_under_the_wrong_chunk_moves_to_the_record_that_contains_it(
     assert dropped == 0
     assert (cleaned.facts[0].recordKey, cleaned.facts[0].quote) == ('b', '제33조 총무는 "회비"를 총괄적으로 관리한다.')
     validate_synthesis(cleaned, chunks)
+
+
+def test_quote_found_in_several_other_records_is_not_guessed_onto_one_of_them():
+    template = '담당자: 미정 | 기한: 미정'
+    records = {'cited': records_row('제1조 이 내규는 동아리 운영 기준을 정한다.', 'drive:rules:chunk:0'),
+               'meeting-a': records_row('9월 회의 ' + template, 'notion:meeting-a:b1'),
+               'meeting-b': records_row('10월 회의 ' + template, 'notion:meeting-b:b1')}
+    result = Synthesis(facts=[{'recordKey': 'cited', 'quote': template, 'sectionId': 'the-job'}],
+                       tasks=[], conflicts=[], gaps=[], suggestions=[])
+    cleaned, dropped = repair_synthesis(result, records)
+    assert cleaned.facts == [] and dropped == 1
+
+
+def records_row(content, source_id):
+    return records()[1].model_copy(update={'content': content, 'sourceId': source_id})

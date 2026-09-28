@@ -137,11 +137,11 @@ def repair_synthesis(result, registry, role=''):
             r.quote = span
             return
         # Chunks of one file share a title, and live models cite the right sentence under a neighbouring
-        # chunk's recordKey. The quote is kept only if it is verbatim in another visible record.
-        for key, other in registry.items():
-            if span := locate(r.quote, other.content):
-                r.recordKey, r.quote = key, span
-                return
+        # chunk's recordKey. The quote moves only when exactly one other visible record contains it; a
+        # sentence repeated across documents (templates, PDF and Docs copies) is not guessed onto one.
+        found = [(key, span) for key, other in registry.items() if (span := locate(r.quote, other.content))]
+        if len(found) == 1:
+            r.recordKey, r.quote = found[0]
 
     def restore_field(f):
         for r in f.evidence:
