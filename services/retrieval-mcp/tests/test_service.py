@@ -55,6 +55,20 @@ class EmptyAdapter:
         return SourceResult()
 
 
+class ManyRecordsAdapter:
+    def __init__(self, source: SourceName, count: int) -> None:
+        self.source = source
+        self.count = count
+
+    async def search(self, *_: object) -> SourceResult:
+        return SourceResult(
+            records=[evidence(f"{self.source.value}:C1:{index}") for index in range(self.count)]
+        )
+
+    async def fetch_context(self, _: str) -> SourceResult:
+        return SourceResult()
+
+
 class RetrievalServiceTest(unittest.IsolatedAsyncioTestCase):
     async def test_partial_search_preserves_successful_evidence(self) -> None:
         service = RetrievalService(
@@ -83,6 +97,29 @@ class RetrievalServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, "empty")
         self.assertEqual(response.coverage[0].status, "searched")
         self.assertEqual(response.errors, [])
+
+    async def test_coverage_counts_only_records_returned_after_global_limit(self) -> None:
+        service = RetrievalService(
+            adapters={
+                SourceName.SLACK: ManyRecordsAdapter(SourceName.SLACK, 3),
+                SourceName.NOTION: ManyRecordsAdapter(SourceName.NOTION, 2),
+            },
+            registry=Registry(),
+        )
+
+        response = await service.search(
+            SearchRequest(
+                query="행사비",
+                sourceScope=[SourceName.SLACK, SourceName.NOTION],
+                limit=2,
+            )
+        )
+
+        self.assertEqual(len(response.records), 2)
+        counts = {item.source: item.record_count for item in response.coverage}
+        self.assertEqual(counts[SourceName.SLACK], 1)
+        self.assertEqual(counts[SourceName.NOTION], 1)
+        self.assertEqual(sum(counts.values()), len(response.records))
 
     async def test_unsupported_context_has_an_explicit_error(self) -> None:
         service = RetrievalService(adapters={}, registry=Registry())

@@ -75,6 +75,18 @@ class RetrievalService:
                 remainder.append(record)
         return (primary + remainder)[:limit]
 
+    @staticmethod
+    def _returned_record_count(source: SourceName, records: list[Evidence]) -> int:
+        """Count records that are present in this response, not upstream hits.
+
+        ``coverage.recordCount`` belongs to the public handoff contract.  The
+        service ranks, de-duplicates, and applies a global limit after source
+        adapters return their candidate lists, so an adapter's raw hit count
+        can be larger than the final ``records`` array.  Reporting the final
+        count keeps downstream contract validation deterministic.
+        """
+        return sum(record.source_id.startswith(f"{source.value}:") for record in records)
+
     async def search(self, request: SearchRequest) -> SearchResponse:
         hints = self.registry.hints(request)
         cursor_state = self._decode_cursor(request.cursor)
@@ -117,12 +129,18 @@ class RetrievalService:
         else:
             status = SearchStatus.OK
 
+        ordered_records = self._order(records, hints.terms, request.limit)
+        final_coverage = [
+            item.model_copy(update={"record_count": self._returned_record_count(item.source, ordered_records)})
+            for item in coverage
+        ]
+
         return SearchResponse(
             requestId=f"req-{uuid.uuid4()}",
             status=status,
-            records=self._order(records, hints.terms, request.limit),
+            records=ordered_records,
             nextCursor=self._encode_cursor(next_cursors),
-            coverage=coverage,
+            coverage=final_coverage,
             errors=errors,
         )
 
