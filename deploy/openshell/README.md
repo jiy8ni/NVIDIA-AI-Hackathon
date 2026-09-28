@@ -46,7 +46,7 @@ Retrieval MCP가 bearer token/OAuth/mTLS를 요구하게 되면, 그 secret도 *
 
 ## 4. 검증된 ref만 clone하여 시작
 
-`HANDOFF_GIT_REF`에는 merge 전 검증 branch 또는 merge 후 SHA를, `HANDOFF_EXPECTED_COMMIT`에는 정확한 commit SHA를 둔다. bootstrap은 clone 후 SHA가 다르면 중단한다. 기본은 offline+fixture로 sandbox 자체를 먼저 검증하는 것이다.
+`HANDOFF_GIT_REF`에는 원격의 검증 branch 또는 tag를, `HANDOFF_EXPECTED_COMMIT`에는 그 ref가 반드시 가리켜야 하는 정확한 commit SHA를 둔다. bootstrap은 clone 후 SHA가 다르면 중단한다. 기본은 offline+fixture로 sandbox 자체를 먼저 검증하는 것이다.
 
 ```bash
 openshell sandbox create \

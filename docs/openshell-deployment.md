@@ -37,7 +37,7 @@ HandoffOS sandbox에는 Slack·Notion·Drive credential을 넣지 않는다. 그
 2. **지윤 (Retrieval)**: Streamable MCP URL, OAuth credential 보관 위치, 사용자별 ACL의 enforcement point, TLS/인증 방식, production source ID 규칙을 확정한다.
 3. **민성 + 지윤**: 실제 source credential이 있는 staging에서 `ok`, `empty`, `partial`, `failed`, excerpt→context 각각 1회 검증한다. `RETRIEVAL_MCP_URL`은 sandbox에서 도달 가능한 TLS DNS여야 한다.
 4. **OpenShell host 담당**: Gateway와 compute driver(Docker/Podman/Kubernetes)를 준비한 뒤 `deploy/openshell` 절차로 sandbox를 만든다.
-5. 검증 커밋을 push한 뒤 sandbox가 해당 branch/commit만 clone하도록 `HANDOFF_GIT_REF`와 `HANDOFF_EXPECTED_COMMIT`을 지정한다. sandbox 내부에서 별도 수정/commit/push는 하지 않는다.
+5. 검증 branch 또는 tag를 push한 뒤 `HANDOFF_GIT_REF`에 해당 remote ref를, `HANDOFF_EXPECTED_COMMIT`에 기대 commit SHA를 지정한다. sandbox는 clone 뒤 SHA가 일치하지 않으면 시작하지 않는다. sandbox 내부에서 별도 수정/commit/push는 하지 않는다.
 
 ## API·루프 정합성
 

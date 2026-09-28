@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-: "${HANDOFF_GIT_REF:?Set the verified branch or commit SHA to clone.}"
+: "${HANDOFF_GIT_REF:?Set the verified remote branch or tag to clone.}"
 : "${HANDOFF_REPOSITORY_URL:=https://github.com/jiy8ni/NVIDIA-AI-Hackathon.git}"
 : "${HANDOFF_EXPECTED_COMMIT:=}"
 
