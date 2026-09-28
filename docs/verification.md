@@ -1,13 +1,14 @@
 # MVP 구현 및 원칙 재검증
 
-검증일: 2026-09-27. 기준 main: 1a47284bd849692e9de0d7940cfa1f235b66db6a.
-작업 브랜치: codex/handoffos-orchestrator-mvp. 실제 연동과 모의 검증을 아래처럼 구분합니다.
+검증일: 2026-09-28. 기준 main: 5164c37.
+작업 브랜치: feat/agent-retrieval-integration. 실제 NVIDIA hosted 연동과 모의 Retrieval 자료 검증을 아래처럼 구분합니다.
 
 ## 실행 결과
 
-- Python 3.12.14 + NAT 1.5.0 환경: **38 tests passed**. 입력 계약, 추론 어댑터, 엔진, 근거/인물/일정/업무 관계, 실제 Node↔Python 프로세스, 실제 로컬 HTTP Retrieval, native/NAT 동등성 포함.
+- Python 3.12.14 + NAT 1.5.0 환경: **47 tests passed**. 입력 계약, guided JSON 추론 어댑터, 엔진, 근거/인물/일정/업무 관계, 실제 Node↔Python 프로세스, 실제 로컬 HTTP Retrieval, native/NAT 동등성 포함.
 - Node ACL bridge: **9 tests passed**. 정상·미설정·권한 철회 3종·누락/중복/잘못된 requestId·네트워크 실패 시 차단.
 - NAT SDK를 설치해 WorkflowBuilder와 등록된 handoffos function을 실제 실행. 모델은 offline, 자료는 fixture.
+- NVIDIA Build Personal API 권한으로 `nvidia/nemotron-3.5-lightning-30b-a3b` hosted endpoint를 실제 호출. `ask`는 evidence 2건, `generate`는 evidence 7건을 조회하고 `validated` trace까지 확인.
 - NAT 경유 Edge 브라우저: generate→poll→ready, 사람·일정·선행 업무, 충돌·질문·인용 링크 검증. page error 0. 데스크톱/모바일 화면 시각 검토.
 - 공개 API: 12 operations 유지. 원본 OpenAPI Git diff 없음. 요청/Workspace/Section/Person/Timeline/Answer/Mutation/Feedback JSON Schema 검사.
 - worker 종료 장애 테스트: failed 표시, 이전 성공 콘텐츠와 체크리스트 보존.
@@ -50,7 +51,7 @@ NAT 환경 구성은 nvidia-runtime.md와 requirements-nat-lock.txt 참고. NAT 
 
 ## 완료로 주장하지 않는 항목
 
-1. **실제 Nemotron endpoint 호출:** NVIDIA_API_KEY·모델 tokenizer 설정 없음. mock 모델 HTTP 테스트는 live NVIDIA 실행 증거가 아님.
+1. **실제 Nemotron endpoint 호출:** hosted API `ask`/`generate`와 matching tokenizer까지 검증 완료. 실제 조직 데이터가 아닌 fixture evidence를 사용했으며, 비용·지연·한국어 품질 측정은 남음.
 2. **실제 Retrieval/SaaS/MCP/ACL 서버:** feat/retrieval 브랜치는 확인 시 main과 같은 기준 커밋. HTTP 요청 및 ACL bridge는 합의 전 제안 규약. 로컬 HTTP 프로토콜 테스트이지 Slack/Notion/Drive 실제 접속이 아님.
 3. **NeMo Framework/Microservices 전제 충족:** 실제 NeMo Retriever·NemoClaw/OpenShell 실행 없음. NAT 실행만으로 참가 전제를 충족했다고 단정하지 않음.
 4. **NAT profiler/OTel:** SDK workflow는 검증했지만 trace는 자체 JSON 이벤트이며 profiler 연동은 별도.
@@ -59,6 +60,6 @@ NAT 환경 구성은 nvidia-runtime.md와 requirements-nat-lock.txt 참고. NAT 
 ## 팀원이 이어서 할 최소 작업
 
 - 지윤: 실제 Retrieval 응답 4종, 요청/커서·PDF provider·ACL 재확인 함수 합의.
-- 민성: 키와 tokenizer를 로컬 환경에 설정하고 승인된 가상 데이터로 live generate/ask·인용·충돌 품질 검증.
+- 민성: hosted Nemotron generate/ask·인용·충돌 품질 검증 완료. 실제 Retrieval MCP OAuth/ACL과 결합한 end-to-end 검증이 남음.
 - Jay: 상세 Task/인물/일정 payload와 화면 연결 PR 리뷰.
 - 제출: 실제 NVIDIA 실행 로그와 평가 지표를 추가하고 NeMo Framework/Microservices 인정 범위를 주최 측에 확인.

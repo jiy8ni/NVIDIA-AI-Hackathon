@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import re
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
@@ -98,10 +99,164 @@ class HttpProvider:
                     raise AgentError('RETRIEVAL_INVALID', '검색 응답이 계약을 만족하지 않습니다.') from exc
 
 
+class McpProvider:
+    """Read-only streamable-HTTP bridge to the team's Retrieval MCP.
+
+    The public HandoffOS API and the frozen Evidence contract never see MCP
+    protocol details.  ``call_tool`` is injectable so this boundary can be
+    verified without an MCP server or source credentials.
+    """
+
+    def __init__(self, url=None, call_tool=None):
+        self.url = url or os.getenv('RETRIEVAL_MCP_URL', '')
+        parsed = urlparse(self.url)
+        if not self.url or not safe_url(self.url) or (parsed.scheme != 'https' and parsed.hostname not in ('localhost', '127.0.0.1')):
+            raise ValueError('Invalid RETRIEVAL_MCP_URL')
+        self._injected_call_tool = call_tool
+        self._events = []
+        self._context_fetches = 0
+
+    def drain_events(self):
+        events, self._events = self._events, []
+        return events
+
+    @staticmethod
+    def _response_with(result, **updates):
+        value = result.model_dump()
+        value.update(updates)
+        return RetrievalResponse.model_validate(value)
+
+    async def _call_tool(self, name, arguments):
+        if self._injected_call_tool:
+            return await self._injected_call_tool(name, arguments)
+        try:
+            from mcp import ClientSession
+            from mcp.client.streamable_http import streamablehttp_client
+        except ImportError as exc:
+            raise AgentError('MCP_NOT_CONFIGURED', 'MCP 연동 환경에 .[mcp] 의존성을 설치하세요.', 503) from exc
+        headers = {}
+        token = os.getenv('RETRIEVAL_MCP_TOKEN', '')
+        if token:
+            headers['Authorization'] = 'Bearer ' + token
+        try:
+            async with streamablehttp_client(self.url, headers=headers or None) as streams:
+                read_stream, write_stream = streams[0], streams[1]
+                async with ClientSession(read_stream, write_stream) as session:
+                    await session.initialize()
+                    result = await session.call_tool(name, arguments)
+        except Exception as exc:
+            # Tool and protocol details can include source/service information.
+            raise AgentError('MCP_UNAVAILABLE', 'Retrieval MCP에 연결하지 못했습니다.', 502) from exc
+        if getattr(result, 'isError', False):
+            raise AgentError('MCP_TOOL_FAILED', 'Retrieval MCP 도구 호출이 실패했습니다.', 502)
+        structured = getattr(result, 'structuredContent', None)
+        if isinstance(structured, dict):
+            return structured
+        for block in getattr(result, 'content', []) or []:
+            text = getattr(block, 'text', None)
+            if isinstance(text, str):
+                try:
+                    value = json.loads(text)
+                except ValueError:
+                    continue
+                if isinstance(value, dict):
+                    return value
+        raise AgentError('RETRIEVAL_INVALID', 'Retrieval MCP 도구 응답이 JSON 객체가 아닙니다.')
+
+    @staticmethod
+    def _adapt_response(value, request_id, requested_sources, *, allow_subset=False):
+        if not isinstance(value, dict):
+            raise AgentError('RETRIEVAL_INVALID', 'Retrieval MCP 응답 형식이 올바르지 않습니다.')
+        adapted = deepcopy(value)
+        coverage = adapted.get('coverage')
+        if not isinstance(coverage, list):
+            raise AgentError('RETRIEVAL_INVALID', 'Retrieval MCP coverage가 없습니다.')
+        # Retrieval MCP uses coverage=partial for a source with recoverable
+        # errors.  The frozen HandoffOS contract expresses that information via
+        # response.status=partial and errors, while coverage remains searched.
+        had_partial_coverage = False
+        for item in coverage:
+            if isinstance(item, dict) and item.get('status') == 'partial':
+                had_partial_coverage = True
+                item['status'] = 'searched'
+        if had_partial_coverage and adapted.get('status') != 'partial' and not adapted.get('errors'):
+            raise AgentError('RETRIEVAL_INVALID', 'MCP coverage partial에는 partial 상태 또는 오류가 필요합니다.')
+        adapted['requestId'] = request_id
+        try:
+            result = RetrievalResponse.model_validate(adapted)
+        except ValueError as exc:
+            raise AgentError('RETRIEVAL_INVALID', 'Retrieval MCP 응답이 Evidence 계약을 만족하지 않습니다.') from exc
+        sources = {item.source for item in result.coverage}
+        expected = set(requested_sources)
+        if not sources or not sources.issubset(expected) or (not allow_subset and sources != expected):
+            raise AgentError('RETRIEVAL_INVALID', 'Retrieval MCP coverage 범위가 요청과 다릅니다.')
+        if any(provider_of(record) not in expected for record in result.records):
+            raise AgentError('SCOPE_DENIED', 'Retrieval MCP가 허용 범위 밖 자료를 반환했습니다.', 403)
+        for item in result.coverage:
+            if item.recordCount != sum(provider_of(record) == item.source for record in result.records):
+                raise AgentError('RETRIEVAL_INVALID', 'Retrieval MCP coverage.recordCount가 records와 다릅니다.')
+        return result
+
+    @staticmethod
+    def _recount(records, sources):
+        return [{'source': source, 'status': 'searched',
+                 'recordCount': sum(provider_of(record) == source for record in records)} for source in sources]
+
+    async def search(self, query, sources, cursor, scope, request_id):
+        selected = list(dict.fromkeys(sources))
+        if not selected or not set(selected).issubset(scope.sources):
+            raise AgentError('SCOPE_DENIED', 'MCP 검색 범위가 서버 권한 범위를 벗어났습니다.', 403)
+        raw = await self._call_tool('search_evidence', {
+            'query': query,
+            'sourceScope': selected,
+            'cursor': cursor,
+        })
+        self._events.append({'event': 'mcp_tool', 'tool': 'search_evidence'})
+        result = self._adapt_response(raw, request_id, selected)
+
+        # ``read_more`` remains a local context-window action.  This separate,
+        # bounded provider-side enrichment is only for a result that the MCP
+        # itself labelled as an excerpt/partial extraction.  It is not an LLM
+        # action and cannot widen query or source scope.
+        candidate = next((record for record in result.records
+                          if record.contentOrigin == 'source_excerpt' or record.extractionStatus == 'partial'), None)
+        if not candidate or self._context_fetches >= 1:
+            return result
+        self._context_fetches += 1
+        try:
+            raw_context = await self._call_tool('fetch_context', {'sourceId': candidate.sourceId})
+        except AgentError:
+            self._events.append({'event': 'mcp_tool_failed', 'tool': 'fetch_context'})
+            return self._response_with(
+                result,
+                status='partial',
+                errors=[*result.errors, {'source': provider_of(candidate) or 'unknown', 'code': 'context_unavailable',
+                                          'message': '선택한 자료의 전체 문맥을 확인하지 못했습니다.'}],
+                coverage=self._recount(result.records, selected),
+            )
+        self._events.append({'event': 'mcp_tool', 'tool': 'fetch_context', 'reason': 'excerpt_or_partial'})
+        context = self._adapt_response(raw_context, request_id, selected, allow_subset=True)
+        source = provider_of(candidate)
+        if context.status in ('failed', 'empty') or not context.records:
+            errors = result.errors + context.errors + [
+                {'source': source or 'unknown', 'code': 'context_unavailable',
+                 'message': '선택한 자료의 전체 문맥을 확인하지 못했습니다.'}
+            ]
+            return self._response_with(result, status='partial', errors=errors,
+                                       coverage=self._recount(result.records, selected))
+        expanded = [record for record in result.records if record.sourceId != candidate.sourceId]
+        expanded.extend(context.records)
+        errors = result.errors + context.errors
+        return self._response_with(result, status='partial' if errors else result.status,
+                                   records=expanded, coverage=self._recount(expanded, selected), errors=errors)
+
+
 def make_provider():
     mode = os.getenv('HANDOFF_RETRIEVAL_MODE', 'fixture')
     if mode == 'fixture':
         return FixtureProvider()
     if mode == 'http':
         return HttpProvider()
-    raise ValueError('HANDOFF_RETRIEVAL_MODE must be fixture or http')
+    if mode == 'mcp':
+        return McpProvider()
+    raise ValueError('HANDOFF_RETRIEVAL_MODE must be fixture, http or mcp')

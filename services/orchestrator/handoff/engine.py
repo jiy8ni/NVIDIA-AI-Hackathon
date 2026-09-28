@@ -2,11 +2,13 @@
 import asyncio
 import hashlib
 import json
+import os
 import re
 import time
 import uuid
 from datetime import datetime, timezone
-from .contracts import AgentError, RetrievalResponse
+from pathlib import Path
+from .contracts import AgentError, Decision, RetrievalResponse
 from .models import make_model
 from .providers import ROOT, make_provider, provider_of, safe_url
 from .projection import project, validate_synthesis
@@ -18,19 +20,21 @@ class Orchestrator:
     def __init__(self, provider=None, model=None, trace_dir=None):
         self.provider = provider or make_provider()
         self.model = model or make_model()
-        self.trace_dir = trace_dir or ROOT / '.runtime' / 'traces'
+        self.trace_dir = Path(trace_dir) if trace_dir else ROOT / '.runtime' / 'traces'
 
     async def run(self, request):
         run_id = str(uuid.uuid4())
         trace = {'runId': run_id, 'mode': request.mode, 'modelMode': self.model.mode, 'events': []}
         try:
-            async with asyncio.timeout(42 if request.mode == 'ask' else 170):
+            ask_deadline = float(os.getenv('HANDOFF_ASK_TIMEOUT_SECONDS', '120'))
+            generate_deadline = float(os.getenv('HANDOFF_GENERATE_TIMEOUT_SECONDS', '240'))
+            async with asyncio.timeout(ask_deadline if request.mode == 'ask' else generate_deadline):
                 return await self._run(request, trace)
         except TimeoutError as exc:
             trace['events'].append({'event': 'stop', 'reason': 'deadline'})
             raise AgentError('AGENT_TIMEOUT', '처리 시간 한도를 넘었습니다. 검색 범위를 줄여 다시 시도하세요.', 504) from exc
         except AgentError as exc:
-            trace['events'].append({'event': 'error', 'code': exc.code})
+            trace['events'].append({'event': 'error', 'code': exc.code, 'message': exc.message})
             raise
         finally:
             # Counts and decision categories only: no document text, JWTs, model reasoning or user question.
@@ -87,6 +91,15 @@ class Orchestrator:
                 trace['events'].append({'event': 'stop', 'reason': 'search_budget'})
                 break
             decision = await self.model.decide(state)
+            # An empty initial state cannot support a grounded synthesis. Some
+            # reasoning models conservatively choose ``finish`` before seeing
+            # any records, so the orchestrator guarantees one bounded search
+            # within the caller's allowed source scope before accepting finish.
+            if decision.action == 'finish' and not history and not registry:
+                decision = Decision(action='search', query=request.question or '*',
+                                    sources=list(request.scope.sources),
+                                    reason='초기 근거를 조회한 뒤 합성합니다.')
+                trace['events'].append({'event': 'policy', 'reason': 'initial_search_required'})
             if decision.action == 'finish':
                 trace['events'].append({'event': 'stop', 'reason': 'finish'})
                 break
@@ -117,6 +130,9 @@ class Orchestrator:
             rid = str(uuid.uuid4())
             result = await self.provider.search(query, sources, next_cursor, request.scope, rid)
             search_count += 1
+            drain_events = getattr(self.provider, 'drain_events', None)
+            if drain_events:
+                trace['events'].extend(drain_events())
             result = RetrievalResponse.model_validate(result)
             if result.requestId != rid:
                 raise AgentError('RETRIEVAL_INVALID', '검색 응답 requestId가 일치하지 않습니다.')
@@ -166,11 +182,11 @@ class Orchestrator:
             try:
                 validate_synthesis(result, visible, request.role)
                 break
-            except AgentError:
+            except AgentError as exc:
                 if attempt:
                     raise
                 state['validationFeedback'] = 'Remove unsupported fields and quotes. Use exact visible quotes only.'
-                trace['events'].append({'event': 'repair', 'code': 'EVIDENCE_VALIDATION'})
+                trace['events'].append({'event': 'repair', 'code': 'EVIDENCE_VALIDATION', 'message': exc.message})
         generated_at = datetime.now(timezone.utc).isoformat()
         output = project(result, visible, request.mode, request.context, warnings, self.model.mode, generated_at)
         trace['events'].append({'event': 'validated', 'records': len(visible), 'facts': len(result.facts), 'tasks': len(result.tasks)})

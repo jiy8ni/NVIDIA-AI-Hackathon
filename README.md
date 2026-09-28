@@ -36,7 +36,7 @@ node scripts/dev.mjs
 - 충돌 양쪽 원문 및 수정 시각, 질문 후보와 초안. 전송 기능 없음.
 - 기존 UI의 5개 섹션, 체크리스트 보존, 선택 문맥 Q&A, 실제 인용 링크, 검토 피드백.
 - 검증된 같은 콘텐츠를 사용하는 한글 PDF 내보내기.
-- HTTP Retrieval 어댑터와 Nemotron JSON 추론 어댑터, 선택적 NAT workflow 등록.
+- HTTP/Streamable-MCP Retrieval 어댑터와 Nemotron JSON 추론 어댑터, 선택적 NAT workflow 등록.
 - HTTP 자료를 캐시에서 제공하기 전 전체 출처 ACL 재확인. 미설정·실패·권한 철회 시 제공 차단.
 
 ## 테스트와 PDF
@@ -69,5 +69,6 @@ $env:PYTHONPATH='services/orchestrator'
 - [원칙 및 검증 기록](docs/verification.md)
 - [데모 순서](docs/demo-script.md)
 - [공개 OpenAPI 원본](apps/web/openapi.yaml)
+- [Retrieval MCP·OpenShell 배포 계획](docs/openshell-deployment.md)
 
 NAT 실행 방법과 고정 의존성은 [NVIDIA 실행 안내](docs/nvidia-runtime.md), 검증 범위와 제한은 [검증 기록](docs/verification.md)을 확인하세요.

@@ -11,6 +11,9 @@ dependencies = ["pydantic>=2.10,<3", "httpx>=0.28,<1", "fastapi>=0.115,<1", "uvi
 
 [project.optional-dependencies]
 nat = ["nvidia-nat==1.5.0"]
+# The native Orchestrator uses the official MCP Python client only when
+# HANDOFF_RETRIEVAL_MODE=mcp.  Keeping it optional preserves the offline MVP.
+mcp = ["mcp>=1.12,<2"]
 
 [project.entry-points.'nat.plugins']
 handoffos = "handoff.nat_workflow"

@@ -24,6 +24,9 @@ def test_nemotron_json_contract_and_schema_repair(monkeypatch):
     assert result.action == 'finish' and len(seen) == 2
     assert seen[0]['messages'][0]['role'] == 'system'
     assert 'untrusted' in seen[0]['messages'][1]['content']
+    assert seen[0]['response_format'] == {'type': 'json_object'}
+    assert seen[0]['chat_template_kwargs'] == {'enable_thinking': False}
+    assert seen[0]['guided_json']['title'] == 'Decision'
 
 def test_nemotron_http_failure_is_not_offline_answer(monkeypatch):
     real = httpx.AsyncClient

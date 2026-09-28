@@ -97,12 +97,28 @@ def test_repeated_search_stops(tmp_path):
     trace = json.loads(next(tmp_path.glob('*.json')).read_text())
     assert any(e.get('reason') == 'repeated_search' for e in trace['events'])
 
+class FinishFirst(OfflineModel):
+    async def decide(self, state):
+        return Decision(action='finish', query='', sources=[], reason='premature')
+
+def test_empty_initial_finish_is_replaced_by_bounded_search(tmp_path):
+    output = run(tmp_path, model=FinishFirst(), provider=Provider())
+    trace = json.loads(next(tmp_path.glob('*.json')).read_text())
+    assert output['runId']
+    assert any(e.get('reason') == 'initial_search_required' for e in trace['events'])
+    assert any(e['event'] == 'retrieve' for e in trace['events'])
+
 def test_context_budget_reports_truncation(tmp_path):
     engine = Orchestrator(trace_dir=tmp_path)
     row = records()[0].model_copy(update={'content': '자료가 아주 깁니다. ' * 10000})
     packed, visible, truncated = engine.pack({'x': row})
     assert truncated and len(visible['x'].content) < len(row.content)
     assert packed[0]['content'] == visible['x'].content
+
+def test_string_trace_dir_is_normalized_to_path(tmp_path):
+    output = asyncio.run(Orchestrator(trace_dir=str(tmp_path)).run(request('ask', '자료?')))
+    assert output['runId']
+    assert list(tmp_path.glob('*.json'))
 
 def test_nemotron_never_falls_back_without_key(monkeypatch):
     monkeypatch.setenv('HANDOFF_MODEL_MODE', 'nemotron'); monkeypatch.delenv('NVIDIA_API_KEY', raising=False)
