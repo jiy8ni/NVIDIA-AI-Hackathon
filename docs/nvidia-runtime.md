@@ -1,4 +1,4 @@
-# NVIDIA 실행 연결과 미검증 항목
+# NVIDIA 실행 연결과 검증 상태
 
 ## Nemotron
 
@@ -11,15 +11,21 @@ NVIDIA_MODEL=선택한_endpoint에서_허용된_모델_ID
 NVIDIA_BASE_URL=https://integrate.api.nvidia.com/v1
 NVIDIA_TOKENIZER_PATH=C:/absolute/path/to/tokenizer.json
 NVIDIA_CONTEXT_TOKENS=32768
+NVIDIA_TIMEOUT_SECONDS=60
+HANDOFF_ASK_TIMEOUT_SECONDS=120
+HANDOFF_GENERATE_TIMEOUT_SECONDS=240
 ```
 
 모델과 동일한 tokenizer.json을 제공하세요. 코드가 임의 모델 tokenizer를 내려받거나 문자 수를 live token 수로 가장하지 않습니다. 컨텍스트 길이는 endpoint의 허용 범위 이내로 설정합니다. 키/모델/tokenizer가 없거나 모델 응답이 실패하면 오류를 반환하며 offline 답으로 몰래 바꾸지 않습니다.
 
-공식 [NVIDIA Chat Completions API](https://docs.api.nvidia.com/nim/reference/llm-apis)를 따르는 HTTP 어댑터입니다. NVIDIA 호스팅 API 호출 코드가 있다는 사실과 NIM/NeMo Microservices를 직접 배포했다는 사실은 다릅니다.
+공식 [NVIDIA Chat Completions API](https://docs.api.nvidia.com/nim/reference/llm-apis)를 따르는 HTTP 어댑터입니다. Nemotron 3.5처럼 reasoning이 기본 활성화된 모델은 구조화된 orchestration 결과가 reasoning trace로 잘리지 않도록 `response_format=json_object`와 `chat_template_kwargs.enable_thinking=false`를 함께 전송합니다. `guided_json`에는 Decision/Synthesis Pydantic 스키마를 전달하고, 응답을 다시 서버 측에서 검증합니다. NVIDIA도 구조화 JSON 출력에서는 thinking을 끄고 guided JSON을 사용하는 방식을 안내합니다. NVIDIA 호스팅 API 호출 코드가 있다는 사실과 NIM/NeMo Microservices를 직접 배포했다는 사실은 다릅니다.
 
-2026-09-28 live 확인에서 제공받은 키로 `GET /v1/models`는 성공했지만, HandoffOS의 실제 `generate` 요청은 Chat Completions endpoint에서 HTTP 410을 받아 `MODEL_UNAVAILABLE`로 종료했습니다. trace에는 `modelMode=nemotron`과 오류 코드만 남았고 키·질문·원문은 기록하지 않았습니다. 즉 **HTTP 경로·키 주입·실패 처리까지는 실제로 확인했지만, 모델 합성 결과는 아직 검증되지 않았습니다.**
+2026-09-28 검증에서 새 Build Personal API 권한으로 `GET /v1/models`가 200을 반환했고, `nvidia/nemotron-3.5-lightning-30b-a3b`의 Chat Completions도 200을 반환했습니다. HandoffOS 실제 실행은 다음과 같이 완료되었습니다.
 
-NVIDIA Build 조직에서 Public API Endpoints 사용 권한을 확인한 뒤, 해당 endpoint가 반환하는 모델 ID와 일치하는 `tokenizer.json`으로 다시 `generate`와 `ask`를 실행하세요. hosted endpoint를 쓸 수 없다면, [NVIDIA NIM self-hosted 배포 옵션](https://build.nvidia.com/nvidia/nemotron-3-nano-30b-a3b?nim=self-hosted)의 OpenAI-compatible base URL과 그 서버가 노출한 모델 ID를 `NVIDIA_BASE_URL`·`NVIDIA_MODEL`에 설정합니다. 어떤 경우에도 실패 시 offline 답으로 몰래 바꾸지 않습니다.
+- `ask`: fixture evidence 2건 조회 → `finish` → `validated`
+- `generate`: fixture evidence 7건 조회 → `finish` → 인물 근거 보정 1회 → `validated`
+
+키·질문·원문은 trace에 기록하지 않았습니다. 초기 검증에서 다른 키로 410이 발생했던 경로도 `MODEL_UNAVAILABLE`로 안전하게 처리되며, 현재 키로는 정상 경로가 확인되었습니다. hosted endpoint를 쓸 수 없다면, [NVIDIA NIM self-hosted 배포 옵션](https://build.nvidia.com/nvidia/nemotron-3-nano-30b-a3b?nim=self-hosted)의 OpenAI-compatible base URL과 그 서버가 노출한 모델 ID를 `NVIDIA_BASE_URL`·`NVIDIA_MODEL`에 설정합니다. 어떤 경우에도 실패 시 offline 답으로 몰래 바꾸지 않습니다.
 
 ## 선택적 NeMo Agent Toolkit
 
@@ -70,7 +76,7 @@ OpenShell 준비 파일과 실제 gateway 전제 조건은 [`openshell-deploymen
 
 | 채점 축 | 이번 구현의 증거 | 제출 전 보완 |
 |---|---|---|
-| NVIDIA 기술 깊이 | Nemotron 결정/합성 어댑터, 실제 NAT workflow 실행, live HTTP failure-path 확인 | API entitlement 또는 self-hosted NIM으로 실제 모델·NAT profiler trace와 비용/지연 측정 |
+| NVIDIA 기술 깊이 | Nemotron 결정/합성 어댑터, guided JSON·reasoning 제어, 실제 NAT workflow와 hosted generate/ask 실행 | 실제 NAT profiler trace와 비용/지연 측정 |
 | 실용성·산업가치 | 업무 정리, 근거, 미확정 질문, 권한 경계 | 실제 신규 구성원 테스트·업무 이해도/소요시간 측정 |
 | 완성도 | 동작 UI/API, 계약 테스트, PDF, 재현 명령 | live provider 연결·장애/성능 검증 |
 | 독창성·커스터마이징 | Task Contract, 상충 근거 보존, '누구에게 확인할까' 초안 | 실제 조직의 의사결정·책임 데이터로 품질 평가 |

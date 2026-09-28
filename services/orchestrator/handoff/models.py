@@ -29,6 +29,7 @@ class NemotronModel:
         self.key = os.getenv('NVIDIA_API_KEY')
         self.model = os.getenv('NVIDIA_MODEL')
         self.base = os.getenv('NVIDIA_BASE_URL', 'https://integrate.api.nvidia.com/v1').rstrip('/')
+        self.timeout = float(os.getenv('NVIDIA_TIMEOUT_SECONDS', '60'))
         if not self.key or not self.model:
             raise AgentError('MODEL_NOT_CONFIGURED', 'Nemotron 모델명과 NVIDIA_API_KEY를 설정하세요.', 503)
         from urllib.parse import urlparse
@@ -53,7 +54,7 @@ class NemotronModel:
                               'schema': schema.model_json_schema()}, ensure_ascii=False)
         if self.count_tokens(SYSTEM + content) + max_tokens + 1024 > self.context_limit:
             raise AgentError('CONTEXT_LIMIT', '모델 문맥 예산을 초과했습니다. 검색 범위를 줄여주세요.')
-        async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
+        async with httpx.AsyncClient(timeout=getattr(self, 'timeout', 30), follow_redirects=False) as client:
             for attempt in range(2):
                 messages = [{'role': 'system', 'content': SYSTEM}, {'role': 'user', 'content': content}]
                 if attempt:
@@ -62,7 +63,16 @@ class NemotronModel:
                     response = await client.post(self.base + '/chat/completions',
                         headers={'Authorization': 'Bearer ' + self.key},
                         json={'model': self.model, 'messages': messages, 'temperature': 0,
-                              'max_tokens': max_tokens, 'stream': False})
+                              'max_tokens': max_tokens, 'stream': False,
+                              # Nemotron 3.5 emits a long reasoning trace by default.
+                              # Structured orchestration output must reserve the budget for
+                              # the contract JSON and must never expose that trace downstream.
+                              'response_format': {'type': 'json_object'},
+                              'chat_template_kwargs': {'enable_thinking': False},
+                              # NVIDIA NIM's guided decoder constrains the
+                              # response to the same Pydantic contract that
+                              # is validated again below.
+                              'guided_json': schema.model_json_schema()})
                     response.raise_for_status()
                     result = response.json()['choices'][0]
                     if result.get('finish_reason') == 'length':
@@ -81,7 +91,7 @@ class NemotronModel:
         return await self.complete('Choose one useful read-only next action. Finish when sufficient, unavailable, or no novel query. read_more with recordKey inspects the next locally stored text window if hasMore=true; it is not a network fetch. Never repeat an action. Sources must stay within allowedSources.', state, Decision, 800)
 
     async def synthesize(self, state):
-        return await self.complete('Extract relevant facts, explicit task fields, unresolved conflicts, knowledge gaps and separately labelled suggestions. An empty list is valid. Prefer fewer precise quotes. Question and page context determine relevance.', state, Synthesis, 4000)
+        return await self.complete('Extract relevant facts, explicit task fields, unresolved conflicts, knowledge gaps and separately labelled suggestions. An empty list is valid. Prefer fewer precise quotes. Every quote must be an exact substring of its recordKey record content; if you cannot copy an exact quote, omit the item. Every non-null field value must be a substring of one of its exact evidence quotes; use null with an empty evidence list when unconfirmed. Use only recordKey values supplied in records. Return compact JSON only; never include explanations, markdown or reasoning in the content. Question and page context determine relevance.', state, Synthesis, 8000)
 
 
 class OfflineModel:
