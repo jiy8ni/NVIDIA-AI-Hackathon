@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 if (fs.existsSync(path.join(root, '.env'))) process.loadEnvFile(path.join(root, '.env'));
-const env = { ...process.env, HANDOFF_INTERNAL_TOKEN: process.env.HANDOFF_INTERNAL_TOKEN || crypto.randomBytes(32).toString('hex'), HANDOFF_JWT_SECRET: process.env.HANDOFF_JWT_SECRET || crypto.randomBytes(32).toString('hex'), HANDOFF_TEAM_ID: process.env.HANDOFF_TEAM_ID || 'atlas', HANDOFF_MODEL_MODE: process.env.HANDOFF_MODEL_MODE || 'offline', HANDOFF_RETRIEVAL_MODE: process.env.HANDOFF_RETRIEVAL_MODE || 'fixture', PYTHONPATH: path.join(root, 'services/orchestrator'), PYTHONUTF8: '1' };
+const env = { ...process.env, HANDOFF_INTERNAL_TOKEN: process.env.HANDOFF_INTERNAL_TOKEN || crypto.randomBytes(32).toString('hex'), HANDOFF_JWT_SECRET: process.env.HANDOFF_JWT_SECRET || crypto.randomBytes(32).toString('hex'), HANDOFF_TEAM_ID: process.env.HANDOFF_TEAM_ID || 'atlas', HANDOFF_MODEL_MODE: process.env.HANDOFF_MODEL_MODE || 'offline', HANDOFF_RETRIEVAL_MODE: process.env.HANDOFF_RETRIEVAL_MODE || 'mcp', PYTHONPATH: path.join(root, 'services/orchestrator'), PYTHONUTF8: '1' };
 const uid = process.env.HANDOFF_USER_ID || 'kim-juhyung';
 const b64 = obj => Buffer.from(JSON.stringify(obj)).toString('base64url');
 const unsigned = b64({ alg: 'HS256', typ: 'JWT' }) + '.' + b64({ sub: uid, teamId: env.HANDOFF_TEAM_ID, iss: 'handoffos-local', aud: 'handoffos-api', exp: Math.floor(Date.now() / 1000) + 43200 });

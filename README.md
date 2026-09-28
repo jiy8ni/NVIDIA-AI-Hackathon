@@ -2,15 +2,27 @@
 
 기존 React UI와 Node 공개 API를 유지하면서, 모의 generate/ask를 Python Orchestrator에 연결했습니다. Slack·Notion·Drive 원문에서 업무 맥락·Task Contract·상충 가능성·확인 질문을 만들고, 근거를 검증한 후 화면에 제공합니다.
 
-**현재 기본 모드는 offline + fixture입니다. 실제 Nemotron 추론을 실행했다고 표시하지 않습니다.** API 키가 없어도 루프·입력/출력 계약·UI·PDF를 재현할 수 있습니다. NVIDIA NeMo Agent Toolkit 1.5 워크플로는 Python 3.12에서 실제 실행하고 브라우저 통합까지 확인했습니다. 실제 Nemotron endpoint 호출은 키·tokenizer 설정 후 별도 검증이 필요합니다.
+**기본 개발 모드는 offline 모델 + 같은 PC의 Retrieval MCP입니다.** 실제 Nemotron 추론을 실행했다고 표시하지 않습니다. Slack·Notion·Drive credential을 아직 설정하지 않았다면 `.env`에서 `HANDOFF_RETRIEVAL_MODE=fixture`로 바꿔 오프라인 데모를 사용할 수 있습니다. NVIDIA NeMo Agent Toolkit 1.5 워크플로는 Python 3.12에서 실제 실행하고 브라우저 통합까지 확인했습니다. 실제 Nemotron endpoint 호출은 키·tokenizer 설정 후 별도 검증이 필요합니다.
 
 ## 빠른 실행 (Windows PowerShell)
 
-저장소 루트에서 실행하세요. Node 22.12+ 또는 24, Python 3.11+가 필요합니다. 이번 검증 환경은 Node 24.11.1 / Python 3.14.3입니다.
+Node 22.12+ 또는 24, Python 3.11+가 필요합니다. 먼저 Retrieval MCP와 HandoffOS를 **같은 PC**에서 실행하세요. 이번 검증 환경은 Node 24.11.1 / Python 3.14.3입니다.
+
+터미널 1에서 Retrieval MCP를 켭니다. 이 서비스의 `.env`에는 Slack·Notion·Drive의 읽기 전용 credential만 둡니다. MCP 자체 인증은 로컬 loopback 실행에서는 사용하지 않습니다.
+
+```powershell
+cd services/retrieval-mcp
+Copy-Item .env.example .env
+uv sync
+uv run --env-file .env retrieval-mcp
+```
+
+터미널 2에서 저장소 루트로 돌아와 HandoffOS를 실행합니다.
 
 ```powershell
 python -m venv .venv
 .venv/Scripts/python.exe -m pip install -r requirements-lock.txt
+.venv/Scripts/python.exe -m pip install -e '.[mcp]'
 npm.cmd ci --prefix services/api
 npm.cmd ci --prefix apps/web
 node scripts/dev.mjs
@@ -22,7 +34,7 @@ node scripts/dev.mjs
 - 실행기가 12시간짜리 개발 JWT와 내부 인증 키를 메모리에서 발급합니다. 키를 로그에 출력하지 않습니다.
 - `Ctrl+C`로 세 프로세스를 종료합니다.
 - `.runtime/state.json`에 문서·진행률·피드백, `.runtime/traces/`에 본문 없는 실행 이벤트가 저장됩니다.
-- `.env`가 있으면 실행기가 읽습니다. 기본 실행에는 필요 없습니다. 실제 키를 VITE_* 변수에 넣거나 Git에 커밋하지 마세요.
+- 실행기는 기본으로 `HANDOFF_RETRIEVAL_MODE=mcp`, `RETRIEVAL_MCP_URL=http://127.0.0.1:8000/mcp`를 사용합니다. `.env`에서는 이를 명시적으로 바꾸거나 `fixture` 오프라인 모드를 선택할 수 있습니다. 실제 키를 VITE_* 변수에 넣거나 Git에 커밋하지 마세요.
 - 이 로그인 방식은 **본인 컴퓨터의 가상 데이터 데모용**입니다. 공개 SaaS 인증/SSO가 아닙니다.
 
 ## 구현 범위
