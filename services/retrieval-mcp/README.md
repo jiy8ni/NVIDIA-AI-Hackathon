@@ -51,11 +51,18 @@ adding this MCP server to another NeMoTron agent.
   error, so results are marked partial. After `NOTION_INDEX_TTL_SECONDS` the
   old index keeps answering while a new one is built.
   `NOTION_INDEX_ROOTS` is an allowlist of databases or pages (names or IDs):
-  only pages under them, including sub-pages, are indexed. Prefer it over
-  indexing a whole workspace; new or unrelated databases then stay out by
-  default. `NOTION_INDEX_EXCLUDE` removes databases or pages (and their
-  sub-pages) even inside an allowed root, e.g. a member directory with contact
-  details. `search_evidence` with `refreshIndex: true` rebuilds and waits.
+  only pages under them are indexed, including sub-pages, pages inside
+  toggles or columns, and inline databases. Prefer it over indexing a whole
+  workspace; new or unrelated databases then stay out by default.
+  `NOTION_INDEX_EXCLUDE` removes databases or pages (and everything under
+  them) even inside an allowed root, e.g. a member directory with contact
+  details. Names can repeat across a workspace, so prefer IDs; an entry that
+  matches several pages or databases is logged as a warning. A page that
+  cannot be read is skipped and reported as `index_pages_skipped`; a failed
+  rebuild keeps the old index and reports `index_refresh_failed`. All Notion
+  requests, including search-time page checks, share
+  `NOTION_INDEX_CONCURRENCY`. `search_evidence` with `refreshIndex: true`
+  joins a running build or starts one, and waits.
 - Google Drive: provide `GOOGLE_ACCESS_TOKEN`, or client ID, client secret, and
   refresh token for a read-only OAuth grant.
 
