@@ -199,3 +199,14 @@ def test_quote_found_in_several_other_records_is_not_guessed_onto_one_of_them():
 
 def records_row(content, source_id):
     return records()[1].model_copy(update={'content': content, 'sourceId': source_id})
+
+
+def test_quote_moves_to_the_same_file_when_another_copy_also_contains_it():
+    rule = '제10조 (임원) 대표 1인과 총무 1인을 둔다.'
+    chunks = {'doc-0': records_row('정관 전문', 'drive:bylaws-doc:chunk:0'),
+              'doc-3': records_row('제9조 … ' + rule, 'drive:bylaws-doc:chunk:3'),
+              'pdf-2': records_row(rule + ' 제11조 …', 'drive:bylaws-pdf:chunk:2')}
+    result = Synthesis(facts=[{'recordKey': 'doc-0', 'quote': rule, 'sectionId': 'team-role'}],
+                       tasks=[], conflicts=[], gaps=[], suggestions=[])
+    cleaned, dropped = repair_synthesis(result, chunks)
+    assert dropped == 0 and cleaned.facts[0].recordKey == 'doc-3'
