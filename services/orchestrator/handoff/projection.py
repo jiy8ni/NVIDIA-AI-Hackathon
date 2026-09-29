@@ -56,6 +56,11 @@ def locate(fragment, text):
     return text[index[start]:index[start + len(needle) - 1] + 1]
 
 
+def _document(source_id):
+    """The file, page or channel a record belongs to: `drive:<file>:chunk:3` -> `drive:<file>`."""
+    return ':'.join(source_id.split(':')[:2])
+
+
 def _ref_ok(r, registry):
     record = registry.get(r.recordKey)
     return bool(record and r.quote in record.content and link(record))
@@ -137,11 +142,16 @@ def repair_synthesis(result, registry, role=''):
             r.quote = span
             return
         # Chunks of one file share a title, and live models cite the right sentence under a neighbouring
-        # chunk's recordKey. The quote is kept only if it is verbatim in another visible record.
-        for key, other in registry.items():
-            if span := locate(r.quote, other.content):
-                r.recordKey, r.quote = key, span
-                return
+        # chunk's recordKey, so a unique match in the same file wins. Otherwise the quote moves only when
+        # exactly one visible record contains it; a sentence repeated across documents (meeting-note
+        # templates, PDF and Docs copies) is not guessed onto one of them.
+        found = [(key, span) for key, other in registry.items() if (span := locate(r.quote, other.content))]
+        if record is not None:
+            same_file = [item for item in found if _document(registry[item[0]].sourceId) == _document(record.sourceId)]
+            if len(same_file) == 1:
+                found = same_file
+        if len(found) == 1:
+            r.recordKey, r.quote = found[0]
 
     def restore_field(f):
         for r in f.evidence:

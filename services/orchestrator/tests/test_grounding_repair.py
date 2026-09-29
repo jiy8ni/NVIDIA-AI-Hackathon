@@ -184,3 +184,29 @@ def test_quote_cited_under_the_wrong_chunk_moves_to_the_record_that_contains_it(
     assert dropped == 0
     assert (cleaned.facts[0].recordKey, cleaned.facts[0].quote) == ('b', '제33조 총무는 "회비"를 총괄적으로 관리한다.')
     validate_synthesis(cleaned, chunks)
+
+
+def test_quote_found_in_several_other_records_is_not_guessed_onto_one_of_them():
+    template = '담당자: 미정 | 기한: 미정'
+    records = {'cited': records_row('제1조 이 내규는 동아리 운영 기준을 정한다.', 'drive:rules:chunk:0'),
+               'meeting-a': records_row('9월 회의 ' + template, 'notion:meeting-a:b1'),
+               'meeting-b': records_row('10월 회의 ' + template, 'notion:meeting-b:b1')}
+    result = Synthesis(facts=[{'recordKey': 'cited', 'quote': template, 'sectionId': 'the-job'}],
+                       tasks=[], conflicts=[], gaps=[], suggestions=[])
+    cleaned, dropped = repair_synthesis(result, records)
+    assert cleaned.facts == [] and dropped == 1
+
+
+def records_row(content, source_id):
+    return records()[1].model_copy(update={'content': content, 'sourceId': source_id})
+
+
+def test_quote_moves_to_the_same_file_when_another_copy_also_contains_it():
+    rule = '제10조 (임원) 대표 1인과 총무 1인을 둔다.'
+    chunks = {'doc-0': records_row('정관 전문', 'drive:bylaws-doc:chunk:0'),
+              'doc-3': records_row('제9조 … ' + rule, 'drive:bylaws-doc:chunk:3'),
+              'pdf-2': records_row(rule + ' 제11조 …', 'drive:bylaws-pdf:chunk:2')}
+    result = Synthesis(facts=[{'recordKey': 'doc-0', 'quote': rule, 'sectionId': 'team-role'}],
+                       tasks=[], conflicts=[], gaps=[], suggestions=[])
+    cleaned, dropped = repair_synthesis(result, chunks)
+    assert dropped == 0 and cleaned.facts[0].recordKey == 'doc-3'

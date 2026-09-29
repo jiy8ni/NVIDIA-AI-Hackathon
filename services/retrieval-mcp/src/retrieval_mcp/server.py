@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Literal
 
+import anyio
+
 from mcp.server.fastmcp import FastMCP
 
 from .models import SearchRequest, SourceName
@@ -57,7 +59,12 @@ async def fetch_context(sourceId: str) -> dict:
 
 
 def main() -> None:
-    mcp.run(transport="streamable-http")
+    async def serve() -> None:
+        # Index Notion in the background from startup instead of on the first search.
+        service.warm_up()
+        await mcp.run_streamable_http_async()
+
+    anyio.run(serve)
 
 
 if __name__ == "__main__":
